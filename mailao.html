@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Tạm Thời Pro</title>
+    <!-- Tải Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* bg-gray-900 */
+        }
+        /* Tùy chỉnh thanh cuộn */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #1f2937; } /* gray-800 */
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; } /* gray-600 */
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; } /* gray-500 */
+        
+        #message-body {
+            width: 100%;
+            height: 40vh;
+            border: none;
+            background: #ffffff;
+            color: #111827;
+            border-radius: 0.5rem;
+        }
+        .loading-spinner {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+            border-radius: 50%;
+            height: 1.25rem; /* h-5 */
+            width: 1.25rem; /* w-5 */
+            border-top: 2px solid transparent;
+            border-bottom: 2px solid transparent;
+            border-left: 2px solid #3b82f6; /* blue-500 */
+            border-right: 2px solid #3b82f6;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .mailbox-item.selected {
+            background-color: #374151; /* gray-700 */
+            border-right: 4px solid #3b82f6; /* blue-500 */
+        }
+    </style>
+</head>
+<body class="text-gray-200 antialiased leading-normal">
+
+    <!-- Trang 1: Giao diện Trang chủ (Yêu cầu 1) -->
+    <div id="home-page" class="min-h-screen flex items-center justify-center p-4">
+        <div class="max-w-md w-full text-center">
+            <h1 class="text-4xl font-bold text-white mb-3">Temp Mail</h1>
+            <h2 class="text-2xl font-semibold text-white mb-4">Tạo email dùng một lần trong 1 cú nhấp chuột</h2>
+            <p class="text-gray-400 mb-8">
+                Tạo địa chỉ email tạm thời miễn phí, chống thư rác, riêng tư và không có quảng cáo.
+            </p>
+            
+            <!-- Hiển thị email (sẽ được cập nhật nếu có) -->
+            <div class="mb-6">
+                <label class="text-gray-400 text-sm mb-2 block">Địa chỉ email tạm thời của bạn:</label>
+                <div class="relative">
+                    <input type="text" id="home-email-display" readonly
+                           class="w-full p-3 pr-10 bg-gray-800 border border-gray-700 rounded-md text-white text-lg font-semibold focus:outline-none"
+                           value="---">
+                    <button id="home-copy-btn" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white p-1.5" title="Sao chép">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2H6zM8 5a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /></svg>
+                    </button>
+                </div>
+                <div id="home-copy-feedback" class="text-green-400 text-sm mt-2 h-5"></div>
+            </div>
+
+            <!-- Các nút hành động -->
+            <div class="grid grid-cols-2 gap-4">
+                <button id="home-new-email-btn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-md transition duration-200 ease-in-out flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+                    </svg>
+                    <span>Email mới</span>
+                </button>
+                <button id="home-restore-btn"
+                        class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-4 rounded-md transition duration-200 ease-in-out flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+                    </svg>
+                    <span>Khôi phục / Quản lý</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trang 2: Giao diện Ứng dụng (3 cột) -->
+    <div id="app-page" class="hidden h-screen">
+        <div class="flex flex-col md:flex-row h-full w-full">
+            <!-- Cột 1: Danh sách Mailbox đã lưu -->
+            <aside id="saved-mail-column" class="w-full md:w-1/3 lg:w-1/4 bg-gray-800 shadow-xl flex flex-col h-full">
+                <div class="p-4 border-b border-gray-700">
+                    <h2 class="text-2xl font-bold text-white mb-4">Hộp thư của bạn</h2>
+                    <button id="app-new-email-btn"
+                            class="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200 ease-in-out">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                        <span>Tạo Email Mới</span>
+                    </button>
+                    <button id="back-to-home-btn"
+                            class="w-full flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200 ease-in-out mt-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" /></svg>
+                        <span>Trở về Trang chủ</span>
+                    </button>
+                </div>
+                
+                <div id="saved-mailbox-list" class="flex-grow overflow-y-auto">
+                    <div id="mailbox-loading" class="p-6 text-center text-gray-400">Đang tải danh sách...</div>
+                </div>
+                
+                <div class="p-3 bg-gray-900 border-t border-gray-700">
+                    <label class="text-xs text-gray-500 block">ID Phiên của bạn:</label>
+                    <input type="text" id="user-id-display" readonly class="w-full text-xs text-gray-400 bg-transparent focus:outline-none truncate" value="Đang kết nối...">
+                </div>
+            </aside>
+
+            <!-- Cột 2: Chi tiết Email và Ghi chú -->
+            <main id="main-column" class="w-full md:w-2/3 lg:w-3/4 bg-gray-900 flex flex-col h-full">
+                
+                <div id="app-placeholder" class="flex-grow flex items-center justify-center text-gray-500 text-center p-4">
+                    <p class="text-xl">Chọn một hộp thư từ danh sách bên trái hoặc tạo một email mới.</p>
+                </div>
+
+                <div id="main-content" class="hidden flex-grow flex-col h-full">
+                    <div class="p-4 bg-gray-800 shadow-md border-b border-gray-700">
+                        <div class="flex flex-col md:flex-row items-center justify-between gap-3">
+                            <input type="text" id="email-display" readonly class="flex-grow w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-white text-lg font-semibold focus:outline-none">
+                            <button id="copy-email-btn" class="w-full md:w-auto flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white font-semibold p-3 rounded-md transition duration-200 ease-in-out flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2H6zM8 5a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /></svg>
+                                <span id="copy-feedback">Sao chép</span>
+                            </button>
+                        </div>
+                        <div class="mt-4">
+                            <label for="note-input" class="block text-sm font-medium text-gray-400 mb-1">Ghi chú (Dùng cho dịch vụ nào?):</label>
+                            <div class="flex gap-3">
+                                <input type="text" id="note-input" class="flex-grow p-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="VD: Đăng ký Facebook, 18/11/2025 10:30">
+                                <button id="save-note-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 rounded-md transition duration-200 ease-in-out">Lưu</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex-grow p-4 overflow-y-auto">
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div class="bg-gray-800 shadow-lg rounded-lg overflow-hidden">
+                                <h3 class="text-xl font-semibold text-white p-4 border-b border-gray-700 flex justify-between items-center">
+                                    <span>Hộp thư đến (<span id="email-count">0</span>)</span>
+                                    <button id="refresh-btn" class="text-gray-400 hover:text-white" title="Làm mới">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.004 9.057a1 1 0 011.265.3A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.3-1.265z" clip-rule="evenodd" /></svg>
+                                    </button>
+                                </h3>
+                                <div id="inbox-list" class="h-[40vh] md:h-[50vh] overflow-y-auto">
+                                    <div id="inbox-loading" class="p-6 text-center text-gray-400">Đang chờ email...</div>
+                                </div>
+                            </div>
+                            <div class="bg-gray-800 shadow-lg rounded-lg overflow-hidden">
+                                <h3 class="text-xl font-semibold text-white p-4 border-b border-gray-700">Nội dung</h3>
+                                <div id="message-view" class="p-4">
+                                    <div id="message-placeholder" class="text-center text-gray-400 p-6">Chọn một email để đọc.</div>
+                                    <div id="message-content" class="hidden">
+                                        <div class="border-b border-gray-700 pb-3 mb-3 text-sm">
+                                            <p><strong>Từ:</strong> <span id="message-from"></span></p>
+                                            <p><strong>Chủ đề:</strong> <span id="message-subject"></span></p>
+                                            <p><strong>Ngày:</strong> <span id="message-date"></span></p>
+                                        </div>
+                                        <iframe id="message-body" srcdoc="<html><body style='color: #111827; font-family: sans-serif; padding: 10px;'></body></html>"></iframe>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <!-- Modal Chia sẻ (Yêu cầu 2) -->
+    <div id="share-modal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-lg w-full">
+            <h3 class="text-lg font-semibold mb-4 text-white">Chia sẻ liên kết Email</h3>
+            <p class="text-sm text-gray-400 mb-2">Bất kỳ ai có liên kết này đều có thể xem hộp thư đến này. Đừng chia sẻ nếu email có thông tin nhạy cảm.</p>
+            <input type="text" id="share-link-input" readonly class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
+            <div class="mt-4 flex justify-end gap-3">
+                <button id="copy-share-link-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md">Sao chép</button>
+                <button id="close-share-modal-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-md">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tải Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- BIẾN TOÀN CỤC ---
+        const API_URL = 'https://www.1secmail.com/api/v1/';
+        let db, auth, userId;
+        let currentSelectedMailbox = null;
+        let checkInterval;
+        let lastCreatedEmail = null; // Lưu email cuối cùng được tạo
+        
+        // UI Elements (chung)
+        const homePage = document.getElementById('home-page');
+        const appPage = document.getElementById('app-page');
+
+        // UI Trang chủ
+        const homeEmailDisplay = document.getElementById('home-email-display');
+        const homeCopyBtn = document.getElementById('home-copy-btn');
+        const homeCopyFeedback = document.getElementById('home-copy-feedback');
+        const homeNewEmailBtn = document.getElementById('home-new-email-btn');
+        const homeRestoreBtn = document.getElementById('home-restore-btn');
+        
+        // UI Trang ứng dụng
+        const savedMailColumn = document.getElementById('saved-mail-column');
+        const mainColumn = document.getElementById('main-column');
+        const appNewEmailBtn = document.getElementById('app-new-email-btn');
+        const backToHomeBtn = document.getElementById('back-to-home-btn');
+        const savedMailboxList = document.getElementById('saved-mailbox-list');
+        const mailboxLoading = document.getElementById('mailbox-loading');
+        const userIdDisplay = document.getElementById('user-id-display');
+        
+        const appPlaceholder = document.getElementById('app-placeholder');
+        const mainContent = document.getElementById('main-content');
+        
+        const emailDisplay = document.getElementById('email-display');
+        const copyBtn = document.getElementById('copy-email-btn');
+        const copyFeedback = document.getElementById('copy-feedback');
+        const noteInput = document.getElementById('note-input');
+        const saveNoteBtn = document.getElementById('save-note-btn');
+        
+        const emailCount = document.getElementById('email-count');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const inboxList = document.getElementById('inbox-list');
+        const inboxLoading = document.getElementById('inbox-loading');
+        
+        const messagePlaceholder = document.getElementById('message-placeholder');
+        const messageContent = document.getElementById('message-content');
+        const messageFrom = document.getElementById('message-from');
+        const messageSubject = document.getElementById('message-subject');
+        const messageDate = document.getElementById('message-date');
+        const messageBody = document.getElementById('message-body');
+        
+        // UI Modal
+        const shareModal = document.getElementById('share-modal');
+        const shareLinkInput = document.getElementById('share-link-input');
+        const copyShareLinkBtn = document.getElementById('copy-share-link-btn');
+        const closeShareModalBtn = document.getElementById('close-share-modal-btn');
+
+        // --- CẤU HÌNH FIREBASE ---
+        // Khi chạy trên nền tảng (như ở đây), các biến __app_id và __firebase_config sẽ được cung cấp.
+        // Khi tự host (theo Bước 6 của hướng dẫn), bạn sẽ xóa phần này và dán config của MÌNH vào.
+            // --- CẤU HÌNH FIREBASE CỦA BẠN ---
+    // Dán đối tượng bạn đã sao chép từ Bước 2 vào đây
+    const firebaseConfig = {
+      apiKey: "AIzaSyAE3Idb4M-g4mXmhq2FL6DB1Ea8bvBa3c8",
+      authDomain: "elated-channel-475713-u8.firebaseapp.com",
+      projectId: "elated-channel-475713-u8",
+      storageBucket: "elated-channel-475713-u8.firebasestorage.app",
+      messagingSenderId: "794467064993",
+      appId: "1:794467064993:web:f8f1145d6c007cd17524e0",
+      measurementId: "G-LF2TMSCNXL"
+    };
+
+    // Tự động lấy appId từ config
+    const appId = firebaseConfig.projectId;
+    // ---------------------------------
+
+        // --- HÀM KHỞI ĐỘNG ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Kiểm tra xem config có phải là config dự phòng không (nghĩa là chưa được cấu hình)
+            if (firebaseConfig.projectId === 'default-app-id' && appId === 'default-app-id') {
+                // Nếu đang chạy tự host mà chưa cấu hình
+                if (window.location.protocol !== "about:") { // "about:" là môi trường preview
+                    document.body.innerHTML = `<div class="p-10 text-center text-red-400"><h1>Lỗi Cấu Hình</h1><p>Bạn chưa cập nhật 'firebaseConfig' trong tệp .html. Vui lòng làm theo Bước 6 của 'firebase_setup_guide.md'.</p></div>`;
+                    return;
+                }
+            }
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const shareLogin = urlParams.get('login');
+            const shareDomain = urlParams.get('domain');
+
+            if (shareLogin && shareDomain) {
+                // Chế độ Guest (Yêu cầu 2)
+                runGuestMode(shareLogin, shareDomain);
+            } else {
+                // Chế độ Bình thường (Yêu cầu 1)
+                runNormalMode();
+            }
+            
+            // Gắn sự kiện cho modal (luôn luôn)
+            closeShareModalBtn.addEventListener('click', () => shareModal.classList.add('hidden'));
+            copyShareLinkBtn.addEventListener('click', copyShareLink);
+        });
+
+        // --- CHẾ ĐỘ GUEST (Tải từ link chia sẻ) ---
+        function runGuestMode(login, domain) {
+            console.log("Chạy Chế độ Guest");
+            // Ẩn/hiện trang
+            homePage.style.display = 'none';
+            appPage.style.display = 'flex';
+            
+            // Ẩn cột danh sách (không cho xem mail khác)
+            savedMailColumn.style.display = 'none';
+            
+            // Cho cột chính chiếm toàn bộ
+            mainColumn.classList.remove('md:w-2/3', 'lg:w-3/4');
+            mainColumn.classList.add('w-full');
+            
+            // Giả lập chọn email
+            currentSelectedMailbox = { id: 'guest', login, domain, note: 'Chế độ khách (chỉ xem)' };
+            
+            // Hiển thị nội dung
+            appPlaceholder.style.display = 'none';
+            mainContent.style.display = 'flex';
+            emailDisplay.value = `${login}@${domain}`;
+            noteInput.value = 'Chế độ khách (chỉ xem)';
+            noteInput.disabled = true;
+            saveNoteBtn.style.display = 'none'; // Ẩn nút lưu
+            
+            resetInboxView();
+            startCheckingMessages(login, domain);
+        }
+        
+        // --- CHẾ ĐỘ BÌNH THƯỜNG (Sử dụng chính) ---
+        function runNormalMode() {
+            console.log("Chạy Chế độ Bình thường");
+            // Gắn sự kiện cho các nút Trang chủ
+            homeNewEmailBtn.addEventListener('click', () => {
+                handleCreateNewEmail(true); // true = tự động chuyển trang
+            });
+            homeRestoreBtn.addEventListener('click', showAppPage);
+            homeCopyBtn.addEventListener('click', () => copyToClipboard(homeEmailDisplay.value, homeCopyFeedback, "Đã sao chép!"));
+
+            // Gắn sự kiện cho các nút Trang ứng dụng
+            appNewEmailBtn.addEventListener('click', () => {
+                handleCreateNewEmail(true); // true = tự động chọn
+            });
+            backToHomeBtn.addEventListener('click', showHomePage);
+            
+            // Gắn sự kiện chung của app
+            saveNoteBtn.addEventListener('click', handleSaveNote);
+            copyBtn.addEventListener('click', () => copyToClipboard(emailDisplay.value, copyFeedback, "Sao chép"));
+            refreshBtn.addEventListener('click', () => {
+                if (currentSelectedMailbox) {
+                    fetchMessages(currentSelectedMailbox.login, currentSelectedMailbox.domain);
+                }
+            });
+
+            // Khởi tạo Firebase
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                setLogLevel('Debug');
+                console.log("Firebase đã khởi tạo.");
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        userIdDisplay.value = userId;
+                        console.log("UserID:", userId);
+                        setupMailboxListener();
+                    } else {
+                        console.log("Đang đăng nhập...");
+                        userIdDisplay.value = "Đang kết nối...";
+                        try {
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (error) {
+                            console.error("Lỗi đăng nhập:", error);
+                            userIdDisplay.value = "Lỗi kết nối!";
+                            mailboxLoading.innerText = "Lỗi xác thực.";
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Không thể khởi tạo Firebase:", error);
+                mailboxLoading.innerText = "Lỗi cấu hình.";
+            }
+        }
+
+        // --- HÀM CHUYỂN TRANG ---
+        function showHomePage() {
+            homePage.style.display = 'flex';
+            appPage.style.display = 'none';
+            // Cập nhật email trên trang chủ
+            if (currentSelectedMailbox) {
+                homeEmailDisplay.value = `${currentSelectedMailbox.login}@${currentSelectedMailbox.domain}`;
+            } else if(lastCreatedEmail) {
+                homeEmailDisplay.value = lastCreatedEmail;
+            } else {
+                homeEmailDisplay.value = '---';
+            }
+        }
+
+        function showAppPage(autoSelectMail = null) {
+            homePage.style.display = 'none';
+            appPage.style.display = 'flex';
+            
+            if (!autoSelectMail) {
+                // Chỉ mở trang, không chọn mail
+                appPlaceholder.style.display = 'flex';
+                mainContent.style.display = 'none';
+                currentSelectedMailbox = null;
+            } else {
+                // Mở trang và chọn mail
+                handleSelectMailbox(autoSelectMail.id, autoSelectMail.login, autoSelectMail.domain, autoSelectMail.note);
+            }
+        }
+
+        // --- QUẢN LÝ FIRESTORE ---
+        function setupMailboxListener() {
+            if (!userId) return;
+            // 'appId' được lấy từ cấu hình firebaseConfig ở trên
+            const collectionPath = `/artifacts/${appId}/users/${userId}/mailboxes`;
+            const q = query(collection(db, collectionPath));
+
+            onSnapshot(q, (snapshot) => {
+                console.log("Dữ liệu Mailbox thay đổi");
+                if (snapshot.empty) {
+                    mailboxLoading.innerText = "Chưa có email nào được lưu.";
+                    savedMailboxList.innerHTML = '';
+                } else {
+                    mailboxLoading.style.display = 'none';
+                    savedMailboxList.innerHTML = '';
+                    snapshot.docs.forEach(doc => {
+                        const mailbox = doc.data();
+                        const fullEmail = `${mailbox.login}@${mailbox.domain}`;
+                        
+                        const item = document.createElement('div');
+                        item.className = 'mailbox-item p-4 border-b border-gray-700 cursor-pointer hover:bg-gray-700 transition duration-150';
+                        if (currentSelectedMailbox && currentSelectedMailbox.id === doc.id) {
+                            item.classList.add('selected');
+                        }
+                        item.dataset.id = doc.id;
+                        item.dataset.login = mailbox.login;
+                        item.dataset.domain = mailbox.domain;
+                        item.dataset.note = mailbox.note || '';
+                        
+                        item.innerHTML = `
+                            <div class="flex justify-between items-center">
+                                <span class="font-semibold text-white truncate">${fullEmail}</span>
+                                <div class="flex-shrink-0 flex gap-2">
+                                    <!-- Nút Chia sẻ (Yêu cầu 2) -->
+                                    <button class="share-mailbox-btn text-gray-400 hover:text-blue-500" title="Chia sẻ">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                            <path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" />
+                                        </svg>
+                                    </button>
+                                    <button class="delete-mailbox-btn text-gray-400 hover:text-red-500" title="Xóa">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-400 truncate mt-1">${mailbox.note || 'Chưa có ghi chú'}</p>
+                        `;
+                        
+                        item.addEventListener('click', (e) => {
+                            const target = e.target.closest('button');
+                            if (target && target.classList.contains('delete-mailbox-btn')) {
+                                handleDeleteMailbox(doc.id, fullEmail);
+                            } else if (target && target.classList.contains('share-mailbox-btn')) {
+                                handleShareMailbox(mailbox.login, mailbox.domain);
+                            } else {
+                                handleSelectMailbox(doc.id, mailbox.login, mailbox.domain, mailbox.note || '');
+                            }
+                        });
+                        
+                        savedMailboxList.appendChild(item);
+                    });
+                }
+            }, (error) => {
+                console.error("Lỗi onSnapshot:", error);
+                mailboxLoading.innerText = "Lỗi khi tải dữ liệu.";
+            });
+        }
+        
+        async function handleCreateNewEmail(autoShow = false) {
+            if (!userId) return;
+            
+            const btn = autoShow ? homeNewEmailBtn : appNewEmailBtn;
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loading-spinner mx-auto"></div>';
+
+            try {
+                const data = await fetchApi('action=genRandomMailbox&count=1');
+                if (!data || data.length === 0) throw new Error("API không trả về email");
+                
+                const fullEmail = data[0];
+                lastCreatedEmail = fullEmail; // Cập nhật email cuối cùng
+                homeEmailDisplay.value = fullEmail; // Cập nhật trang chủ
+                
+                const [login, domain] = fullEmail.split('@');
+                const collectionPath = `/artifacts/${appId}/users/${userId}/mailboxes`;
+                
+                const newDocRef = await addDoc(collection(db, collectionPath), {
+                    login: login,
+                    domain: domain,
+                    note: "",
+                    createdAt: serverTimestamp()
+                });
+                
+                if (autoShow) {
+                    showAppPage({ id: newDocRef.id, login, domain, note: "" });
+                }
+
+            } catch (error) {
+                console.error("Lỗi khi tạo email mới:", error);
+            } finally {
+                homeNewEmailBtn.disabled = false;
+                homeNewEmailBtn.innerHTML = '<span>Email mới</span>';
+                appNewEmailBtn.disabled = false;
+                appNewEmailBtn.innerHTML = '<span>Tạo Email Mới</span>';
+            }
+        }
+
+        function handleDeleteMailbox(docId, email) {
+            console.log(`Đang yêu cầu xóa ${email} (ID: ${docId})`);
+            if (!userId || !docId) return;
+            const docPath = `/artifacts/${appId}/users/${userId}/mailboxes/${docId}`;
+            
+            deleteDoc(doc(db, docPath)).then(() => {
+                console.log("Xóa thành công");
+                if (currentSelectedMailbox && currentSelectedMailbox.id === docId) {
+                    appPlaceholder.style.display = 'flex';
+                    mainContent.style.display = 'none';
+                    currentSelectedMailbox = null;
+                }
+            }).catch(error => console.error("Lỗi khi xóa:", error));
+        }
+        
+        async function handleSaveNote() {
+            if (!currentSelectedMailbox || !userId) return;
+            const newNote = noteInput.value;
+            const docId = currentSelectedMailbox.id;
+            const docPath = `/artifacts/${appId}/users/${userId}/mailboxes/${docId}`;
+            
+            saveNoteBtn.disabled = true;
+            saveNoteBtn.innerText = '...';
+
+            try {
+                await updateDoc(doc(db, docPath), { note: newNote });
+                currentSelectedMailbox.note = newNote;
+            } catch (error) {
+                console.error("Lỗi khi lưu ghi chú:", error);
+            } finally {
+                saveNoteBtn.disabled = false;
+                saveNoteBtn.innerText = 'Lưu';
+            }
+        }
+        
+        // --- CHIA SẺ VÀ SAO CHÉP (Yêu cầu 2) ---
+        function handleShareMailbox(login, domain) {
+            const baseUrl = window.location.href.split('?')[0];
+            const shareUrl = `${baseUrl}?login=${login}&domain=${domain}`;
+            shareLinkInput.value = shareUrl;
+            shareModal.classList.remove('hidden');
+        }
+        
+        function copyShareLink() {
+            copyToClipboard(shareLinkInput.value, copyShareLinkBtn, "Đã sao chép!");
+            setTimeout(() => {
+                copyShareLinkBtn.innerText = "Sao chép";
+            }, 2000);
+        }
+
+        function copyToClipboard(text, feedbackElement, successText = "Đã sao chép!") {
+            if (!text || text === '---') return;
+            
+            // Cố gắng sử dụng API Clipboard hiện đại trước
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => {
+                    updateCopyFeedback(feedbackElement, successText, 'Sao chép');
+                }).catch(() => {
+                    // Fallback nếu thất bại
+                    legacyCopy(text, feedbackElement, successText);
+                });
+            } else {
+                // Fallback cho môi trường không an toàn (như iframe hoặc http)
+                legacyCopy(text, feedbackElement, successText);
+            }
+        }
+        
+        function legacyCopy(text, feedbackElement, successText) {
+            const tempInput = document.createElement('textarea');
+            tempInput.value = text;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            try {
+                document.execCommand('copy');
+                updateCopyFeedback(feedbackElement, successText, 'Sao chép');
+            } catch (err) {
+                updateCopyFeedback(feedbackElement, 'Lỗi!', 'Sao chép');
+            }
+            document.body.removeChild(tempInput);
+        }
+        
+        function updateCopyFeedback(element, successText, originalText) {
+            if (!element) return;
+            
+            if (element.id === 'copy-feedback') {
+                 element.textContent = successText;
+                 setTimeout(() => { element.textContent = originalText; }, 2000);
+            } else if (element.id === 'home-copy-feedback') {
+                element.textContent = successText;
+                setTimeout(() => { element.textContent = ''; }, 2000);
+            } else {
+                element.innerText = successText; // Cho nút modal
+                // Không reset lại chữ của nút modal, để nguyên "Đã sao chép!"
+            }
+        }
+
+        // --- QUẢN LÝ 1SECMAIL API ---
+        
+        function handleSelectMailbox(id, login, domain, note) {
+            console.log(`Đã chọn: ${login}@${domain}`);
+            currentSelectedMailbox = { id, login, domain, note };
+            
+            // Hiển thị nội dung chính
+            appPlaceholder.style.display = 'none';
+            mainContent.style.display = 'flex';
+
+            emailDisplay.value = `${login}@${domain}`;
+            noteInput.value = note;
+            
+            document.querySelectorAll('.mailbox-item').forEach(item => {
+                item.classList.toggle('selected', item.dataset.id === id);
+            });
+            
+            resetInboxView();
+            startCheckingMessages(login, domain);
+        }
+        
+        function startCheckingMessages(login, domain) {
+            clearInterval(checkInterval);
+            fetchMessages(login, domain);
+            checkInterval = setInterval(() => fetchMessages(login, domain), 10000);
+        }
+        
+        async function fetchMessages(login, domain) {
+            if (!login || !domain) return;
+            if (!currentSelectedMailbox || currentSelectedMailbox.login !== login || currentSelectedMailbox.domain !== domain) {
+                clearInterval(checkInterval);
+                return;
+            }
+
+            console.log(`Đang kiểm tra mail cho ${login}@${domain}`);
+            refreshBtn.querySelector('svg').classList.add('animate-spin');
+            inboxLoading.innerText = 'Đang làm mới...';
+            inboxLoading.style.display = 'block';
+
+            const data = await fetchApi(`action=getMessages&login=${login}&domain=${domain}`);
+            refreshBtn.querySelector('svg').classList.remove('animate-spin');
+
+            if (data) {
+                emailCount.textContent = data.length;
+                if (data.length === 0) {
+                    inboxList.innerHTML = '';
+                    inboxLoading.innerText = 'Hộp thư đến trống.';
+                } else {
+                    inboxLoading.style.display = 'none';
+                    inboxList.innerHTML = '';
+                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    data.forEach(email => {
+                        const li = document.createElement('li');
+                        li.className = 'p-3 border-b border-gray-700 hover:bg-gray-600 cursor-pointer transition duration-150';
+                        li.dataset.id = email.id;
+                        li.innerHTML = `
+                            <div class="font-semibold text-white truncate">${email.from}</div>
+                            <div class="text-sm text-gray-300 truncate">${email.subject}</div>
+                            <div class="text-xs text-gray-400 mt-1">${formatDate(email.date)}</div>
+                        `;
+                        li.addEventListener('click', () => readMessage(login, domain, email.id, li));
+                        inboxList.appendChild(li);
+                    });
+                }
+            } else {
+                inboxLoading.innerText = 'Lỗi khi tải hộp thư.';
+            }
+        }
+        
+        async function readMessage(login, domain, messageId, element) {
+            document.querySelectorAll('#inbox-list li').forEach(li => li.classList.remove('bg-gray-600'));
+            element.classList.add('bg-gray-600');
+            
+            messagePlaceholder.style.display = 'none';
+            messageContent.style.display = 'block';
+            
+            messageFrom.textContent = element.querySelector('.font-semibold').textContent;
+            messageSubject.textContent = element.querySelector('.text-sm').textContent;
+            messageDate.textContent = element.querySelector('.text-xs').textContent;
+            messageBody.srcdoc = "<html><body style='color: #111827; font-family: sans-serif; padding: 10px;'>Đang tải nội dung...</body></html>";
+
+            const data = await fetchApi(`action=readMessage&login=${login}&domain=${domain}&id=${messageId}`);
+            
+            if (data) {
+                const bodyContent = data.htmlBody || `<pre style="white-space: pre-wrap; word-wrap: break-word; color: #111827; font-family: sans-serif;">${escapeHTML(data.textBody || '')}</pre>`;
+                messageBody.srcdoc = bodyContent;
+            } else {
+                messageBody.srcdoc = "<html><body style='color: #dc2626; font-family: sans-serif; padding: 10px;'>Không thể tải nội dung.</body></html>";
+            }
+        }
+        
+        async function fetchApi(params) {
+            try {
+                const response = await fetch(`${API_URL}?${params}`);
+                if (!response.ok) throw new Error(`Lỗi API: ${response.statusText}`);
+                return await response.json();
+            } catch (error) {
+                console.error('Lỗi khi gọi API 1secmail:', error);
+                return null;
+            }
+        }
+
+        // --- HÀM TIỆN ÍCH ---
+        function resetInboxView() {
+            inboxList.innerHTML = '';
+            inboxLoading.innerText = 'Đang tải...';
+            inboxLoading.style.display = 'block';
+            emailCount.textContent = '0';
+            resetMessageView();
+        }
+        
+        function resetMessageView() {
+            messagePlaceholder.style.display = 'block';
+            messageContent.style.display = 'none';
+            messageBody.srcdoc = "<html><body style='color: #111827; font-family: sans-serif; padding: 10px;'></body></html>";
+        }
+
+        function formatDate(dateString) {
+            const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+            return new Date(dateString).toLocaleDateString('vi-VN', options);
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/[&<>"']/g, m => ({'&': '&amp;','<': '&lt;','>': '&gt;','"': '&quot;',"'": '&#039;'})[m]);
+        }
+    </script>
+</body>
+</html>
+
+
