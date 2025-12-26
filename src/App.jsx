@@ -83,7 +83,7 @@ const formatDate = (date) => {
 
 const getTodayString = () => new Date().toISOString().split('T')[0];
 
-// --- CÁC COMPONENT CON (ĐÃ CHUYỂN RA NGOÀI APP) ---
+// --- CÁC COMPONENT CON (ĐÃ CHUYỂN RA NGOÀI APP ĐỂ SỬA LỖI BÀN PHÍM) ---
 
 const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, handleLogout, navigateToHome }) => (
   <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-900 text-white transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:inset-auto md:flex md:flex-col shadow-xl border-r border-gray-800`}>
