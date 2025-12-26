@@ -50,7 +50,6 @@ const getTodayString = () => new Date().toISOString().split('T')[0];
 const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, handleLogout, navigateToHome, handleRestoreSidebar }) => {
   const [sidebarKey, setSidebarKey] = useState('');
   const onRestoreSubmit = () => { if (sidebarKey.trim()) { handleRestoreSidebar(sidebarKey); setSidebarKey(''); setIsSidebarOpen(false); } };
-  
   return (
     <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-gray-900 text-white transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:inset-auto md:flex md:flex-col shadow-xl border-r border-gray-800`}>
       <div className="p-6 flex justify-between items-center border-b border-gray-800">
@@ -111,7 +110,7 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
   </div>
 );
 
-// --- DASHBOARD (HIỂN THỊ MAIL) ---
+// --- DASHBOARD ---
 const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, successMsg, currentMailbox, messages }) => {
   const [keyInput, setKeyInput] = useState('');
   const onRestore = () => { if(keyInput.trim()) { handleRestoreByKey(keyInput); setKeyInput(''); } };
@@ -143,25 +142,31 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
              <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300 flex items-center gap-1"><Globe size={10} /> {DOMAIN_NAME}</span>
            </div>
            
-           <div className="grid md:grid-cols-2 gap-4 mb-6">
-             <div className="bg-gray-900/50 p-3 rounded border border-gray-700">
-               <label className="text-[10px] text-gray-500 font-bold uppercase">Email</label>
-               <div className="flex items-center justify-between">
-                 <code className="text-green-400 font-mono text-sm truncate mr-2">{currentMailbox.email}</code>
-                 <button onClick={() => navigator.clipboard.writeText(currentMailbox.email)}><Copy size={14} className="text-gray-400 hover:text-white"/></button>
+           <div className="space-y-4">
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Email</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-3 rounded-lg text-green-400 font-mono text-lg border border-gray-700 select-all">{currentMailbox.email}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.email); alert("Đã copy Email"); }} className="p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={20} /></button>
                </div>
              </div>
-             <div className="bg-gray-900/50 p-3 rounded border border-gray-700">
-               <label className="text-[10px] text-gray-500 font-bold uppercase">API Key (Lưu lại để dùng sau)</label>
-               <div className="flex items-center justify-between">
-                 <code className="text-yellow-400 font-mono text-sm truncate mr-2">{currentMailbox.apiKey}</code>
-                 <button onClick={() => navigator.clipboard.writeText(currentMailbox.apiKey)}><Copy size={14} className="text-gray-400 hover:text-white"/></button>
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">API Key (Mã khôi phục)</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-2 rounded-lg text-yellow-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.apiKey}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.apiKey); alert("Đã copy Key"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={16} /></button>
+               </div>
+             </div>
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Link truy cập nhanh</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-2 rounded-lg text-blue-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.magicLink}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.magicLink); alert("Đã copy Link"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={16} /></button>
+                 <a href={currentMailbox.magicLink} target="_blank" rel="noopener noreferrer" className="p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-colors flex items-center" title="Mở Link ngay"><ExternalLink size={16} /></a>
                </div>
              </div>
            </div>
-
-           {/* LIST MESSAGES */}
-           <div className="border-t border-gray-700 pt-6">
+           <div className="border-t border-gray-700 pt-6 mt-6">
              <h4 className="text-white font-bold mb-4 flex items-center gap-2"><Inbox size={18} /> Hộp thư đến</h4>
              {messages.length === 0 ? (
                <div className="text-center py-8 bg-gray-900/30 rounded-lg border border-gray-700 border-dashed">
@@ -282,21 +287,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- LOGIC LẮNG NGHE TIN NHẮN TỪ FIREBASE (QUAN TRỌNG) ---
   useEffect(() => {
     if (!currentMailbox) { setMessages([]); return; }
-    
-    // Đường dẫn này PHẢI khớp với Cloudflare Worker
-    const messagesRef = collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages');
-    const q = query(messagesRef, orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMessages(newMsgs);
-    }, (error) => {
-      console.error("Lỗi đọc tin nhắn:", error);
-    });
-    return () => unsubscribe();
+    const q = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, (s) => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
   }, [currentMailbox]);
 
   const handleAuth = async (e) => { e.preventDefault(); setError(''); setLoading(true); try { if (isRegistering) await createUserWithEmailAndPassword(auth, email, password); else await signInWithEmailAndPassword(auth, email, password); } catch (e) { setError(e.message); setLoading(false); } };
@@ -308,18 +303,16 @@ export default function App() {
     setLoading(true);
     try {
       if (!auth.currentUser) await signInAnonymously(auth);
-      
-      // Khôi phục mail từ key (Logic demo: lấy từ local, thực tế cần query DB)
-      // Để đơn giản, ta tái tạo object mail từ key
+      // Giả lập khôi phục (Logic thực tế cần query DB)
       const recoveredMail = {
-        email: `recovered_${key.substring(0,5)}@${DOMAIN_NAME}`, // Cần cải thiện: Lưu map Key->Email trong DB
+        email: `recovered_${key.substring(0,5)}@${DOMAIN_NAME}`,
         apiKey: key,
         magicLink: `${window.location.origin}?restore=${key}`,
         createdAt: new Date()
       };
       setCurrentMailbox(recoveredMail);
       setView('dashboard');
-      setSuccessMsg("Đã khôi phục giao diện!");
+      setSuccessMsg("Đã khôi phục!");
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (e) { alert(e.message); } finally { setLoading(false); }
   };
