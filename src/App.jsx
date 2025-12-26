@@ -11,7 +11,7 @@ import {
 } from 'firebase/firestore';
 import { 
   Mail, History, User, LogOut, Menu, X, Copy, RefreshCw, 
-  Shield, Key, Link as LinkIcon, Lock, Globe, ExternalLink, Zap, ArrowRight, Inbox
+  Shield, Key, Link as LinkIcon, Lock, Globe, ExternalLink, Zap, ArrowRight, Inbox, AlertTriangle
 } from 'lucide-react';
 
 // --- CẤU HÌNH ---
@@ -110,7 +110,7 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
   </div>
 );
 
-// --- DASHBOARD (SỬA LỖI TẠO MAIL) ---
+// --- DASHBOARD ---
 const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, successMsg, currentMailbox, messages, handleTestConnection }) => {
   const [keyInput, setKeyInput] = useState('');
   const onRestore = () => { if(keyInput.trim()) { handleRestoreByKey(keyInput); setKeyInput(''); } };
@@ -284,8 +284,22 @@ export default function App() {
         try {
           const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'profile', 'info');
           const snap = await getDoc(uRef);
-          if (!snap.exists()) await setDoc(uRef, { role: 'user', dailyCount: 0, lastResetDate: getTodayString(), email: u.email || null });
-          onSnapshot(uRef, (d) => setUserData(d.data()));
+          
+          // TỰ ĐỘNG TẠO PROFILE NẾU CHƯA CÓ
+          if (!snap.exists()) {
+            const initialData = { 
+              role: 'user', 
+              dailyCount: 0, 
+              lastResetDate: getTodayString(), 
+              email: u.email || null 
+            };
+            await setDoc(uRef, initialData);
+            setUserData(initialData); // Cập nhật state ngay lập tức
+          } else {
+            // Lắng nghe thay đổi
+            onSnapshot(uRef, (d) => setUserData(d.data()));
+          }
+
           const hRef = collection(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'history');
           const q = query(hRef, orderBy('createdAt', 'desc'));
           onSnapshot(q, (s) => setMailHistory(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -321,7 +335,6 @@ export default function App() {
     setLoading(true);
     try {
       if (!auth.currentUser) await signInAnonymously(auth);
-      // Giả lập khôi phục
       const recoveredMail = {
         email: `recovered_${key.substring(0,5)}@${DOMAIN_NAME}`,
         apiKey: key,
@@ -338,11 +351,17 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setIsSidebarOpen(false); setCurrentMailbox(null); };
   const handleUpdatePassword = async () => { if (!newPassword) return; try { await updatePassword(user, newPassword); setSuccessMsg("OK!"); } catch (e) { setError(e.message); } };
 
-  // --- HÀM TẠO MAIL ĐÃ SỬA ---
+  // --- HÀM TẠO MAIL MỚI (CẬP NHẬT: AUTO FIX PROFILE) ---
   const handleCreateMailbox = async () => {
     if (!user) { alert("Bạn chưa đăng nhập!"); return; }
-    if (!userData) { alert("Đang tải dữ liệu, thử lại sau 2s..."); return; }
-    if (userData.role !== 'admin' && userData.dailyCount >= 10) { setError("Đã hết lượt (10/10)!"); return; }
+    
+    // Nếu userData chưa load kịp, tự tạo dữ liệu mặc định để không lỗi
+    let currentUserData = userData;
+    if (!currentUserData) {
+       currentUserData = { role: 'user', dailyCount: 0 }; 
+    }
+
+    if (currentUserData.role !== 'admin' && currentUserData.dailyCount >= 10) { setError("Đã hết lượt (10/10)!"); return; }
     
     setLoading(true);
     try {
@@ -355,8 +374,8 @@ export default function App() {
         magicLink: `${window.location.origin}?restore=${newKey}`
       };
       
-      // Dùng setDoc đơn giản thay vì transaction để tránh lỗi "Document not exist"
       const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'profile', 'info');
+      // Dùng setDoc với merge: true để đảm bảo không lỗi nếu doc chưa có
       await setDoc(uRef, { dailyCount: increment(1), lastResetDate: getTodayString() }, { merge: true });
 
       const hRef = doc(collection(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'history'));
