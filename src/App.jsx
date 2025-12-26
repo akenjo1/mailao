@@ -7,7 +7,7 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, doc, setDoc, getDoc, collection, query, 
-  orderBy, onSnapshot, updateDoc, serverTimestamp, increment, runTransaction
+  orderBy, onSnapshot, updateDoc, serverTimestamp, increment, runTransaction, addDoc
 } from 'firebase/firestore';
 import { 
   Mail, History, User, LogOut, Menu, X, Copy, RefreshCw, 
@@ -87,10 +87,10 @@ const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, han
 const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegistering, setIsRegistering, handleAuth, handleAnonymous, handleRestoreByKey, restoreKeyInput, setRestoreKeyInput, error }) => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 font-sans text-gray-100">
     <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700">
-      <div className="text-center mb-6"><h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent mb-2">CloudMail Pro</h1><p className="text-gray-400 text-sm">Mail tạm thời domain {DOMAIN_NAME}</p></div>
+      <div className="text-center mb-6"><h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent mb-2">CloudMail Pro</h1><p className="text-gray-400 text-sm">Dịch vụ Email ẩn danh</p></div>
       {error && <div className="mb-4 p-3 bg-red-500/20 text-red-300 rounded-lg text-sm">{error}</div>}
       <div className="mb-6 pb-6 border-b border-gray-700">
-        <label className="block text-xs font-bold text-yellow-500 uppercase mb-2">Truy cập nhanh bằng API Key</label>
+        <label className="block text-xs font-bold text-yellow-500 uppercase mb-2">Truy cập bằng API Key</label>
         <div className="flex gap-2">
           <input type="text" className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-yellow-500 outline-none" placeholder="Nhập Key..." value={restoreKeyInput} onChange={(e) => setRestoreKeyInput(e.target.value)} />
           <button onClick={() => handleRestoreByKey()} disabled={loading} className="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-2 rounded-lg text-sm font-bold disabled:opacity-50">Vào</button>
@@ -110,8 +110,8 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
   </div>
 );
 
-// --- DASHBOARD ---
-const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, successMsg, currentMailbox, messages }) => {
+// --- DASHBOARD (SỬA LỖI TẠO MAIL) ---
+const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, successMsg, currentMailbox, messages, handleTestConnection }) => {
   const [keyInput, setKeyInput] = useState('');
   const onRestore = () => { if(keyInput.trim()) { handleRestoreByKey(keyInput); setKeyInput(''); } };
 
@@ -158,26 +158,30 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
                </div>
              </div>
              <div className="group relative">
-               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Link truy cập nhanh</label>
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Magic Link</label>
                <div className="flex items-center gap-2 mt-1">
                  <code className="flex-1 bg-gray-950 p-2 rounded-lg text-blue-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.magicLink}</code>
                  <button onClick={() => { navigator.clipboard.writeText(currentMailbox.magicLink); alert("Đã copy Link"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={16} /></button>
-                 <a href={currentMailbox.magicLink} target="_blank" rel="noopener noreferrer" className="p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-colors flex items-center" title="Mở Link ngay"><ExternalLink size={16} /></a>
+                 <a href={currentMailbox.magicLink} target="_blank" rel="noopener noreferrer" className="p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-colors flex items-center" title="Mở Link"><ExternalLink size={16} /></a>
                </div>
              </div>
            </div>
+
            <div className="border-t border-gray-700 pt-6 mt-6">
-             <h4 className="text-white font-bold mb-4 flex items-center gap-2"><Inbox size={18} /> Hộp thư đến</h4>
+             <div className="flex justify-between items-center mb-4">
+                <h4 className="text-white font-bold flex items-center gap-2"><Inbox size={18} /> Hộp thư đến</h4>
+                <button onClick={handleTestConnection} className="bg-blue-900/50 hover:bg-blue-800 text-blue-300 text-xs px-2 py-1 rounded border border-blue-800 flex items-center gap-1"><Zap size={10} /> Test Kết Nối</button>
+             </div>
              {messages.length === 0 ? (
                <div className="text-center py-8 bg-gray-900/30 rounded-lg border border-gray-700 border-dashed">
                  <div className="animate-pulse text-gray-600 mb-2"><Mail size={32} className="mx-auto" /></div>
                  <p className="text-gray-500 text-sm">Chưa có tin nhắn mới...</p>
-                 <p className="text-gray-600 text-xs">Đang chờ tin nhắn từ Cloudflare...</p>
+                 <p className="text-gray-600 text-xs">Đang lắng nghe Cloudflare...</p>
                </div>
              ) : (
                <div className="space-y-3">
                  {messages.map((msg, idx) => (
-                   <div key={idx} className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 hover:bg-gray-700 transition-colors">
+                   <div key={idx} className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 hover:bg-gray-700 transition-colors animate-fade-in">
                      <div className="flex justify-between items-start mb-2">
                        <span className="font-bold text-blue-300 text-sm">{msg.from}</span>
                        <span className="text-xs text-gray-400">{formatDate(msg.createdAt)}</span>
@@ -191,10 +195,7 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
            </div>
         </div>
       ) : (
-        <div className="text-center text-gray-500 py-10">
-          <p>Chưa có mail nào được chọn.</p>
-          <p className="text-xs">Hãy tạo mới, chọn từ lịch sử hoặc nhập API Key ở trên.</p>
-        </div>
+        <div className="text-center text-gray-500 py-10"><p>Chưa có mail nào được chọn.</p></div>
       )}
     </div>
   );
@@ -255,6 +256,15 @@ export default function App() {
   const [messages, setMessages] = useState([]);
 
   useEffect(() => {
+    if (!document.getElementById('tailwind-cdn')) {
+      const script = document.createElement('script');
+      script.id = 'tailwind-cdn';
+      script.src = "https://cdn.tailwindcss.com";
+      document.head.appendChild(script);
+    }
+  }, []);
+
+  useEffect(() => {
     const checkRestore = async () => {
       const p = new URLSearchParams(window.location.search);
       const k = p.get('restore');
@@ -289,9 +299,17 @@ export default function App() {
 
   useEffect(() => {
     if (!currentMailbox) { setMessages([]); return; }
-    const q = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (s) => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return () => unsub();
+    // QUAN TRỌNG: Đường dẫn này PHẢI khớp với Worker
+    const messagesRef = collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages');
+    const q = query(messagesRef, orderBy('createdAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const newMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(newMsgs);
+    }, (error) => {
+      console.error("Lỗi đọc tin nhắn:", error);
+    });
+    return () => unsubscribe();
   }, [currentMailbox]);
 
   const handleAuth = async (e) => { e.preventDefault(); setError(''); setLoading(true); try { if (isRegistering) await createUserWithEmailAndPassword(auth, email, password); else await signInWithEmailAndPassword(auth, email, password); } catch (e) { setError(e.message); setLoading(false); } };
@@ -303,7 +321,7 @@ export default function App() {
     setLoading(true);
     try {
       if (!auth.currentUser) await signInAnonymously(auth);
-      // Giả lập khôi phục (Logic thực tế cần query DB)
+      // Giả lập khôi phục
       const recoveredMail = {
         email: `recovered_${key.substring(0,5)}@${DOMAIN_NAME}`,
         apiKey: key,
@@ -320,9 +338,12 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setIsSidebarOpen(false); setCurrentMailbox(null); };
   const handleUpdatePassword = async () => { if (!newPassword) return; try { await updatePassword(user, newPassword); setSuccessMsg("OK!"); } catch (e) { setError(e.message); } };
 
+  // --- HÀM TẠO MAIL ĐÃ SỬA ---
   const handleCreateMailbox = async () => {
-    if (!user || !userData) return;
-    if (userData.role !== 'admin' && userData.dailyCount >= 10) { setError("Hết lượt!"); return; }
+    if (!user) { alert("Bạn chưa đăng nhập!"); return; }
+    if (!userData) { alert("Đang tải dữ liệu, thử lại sau 2s..."); return; }
+    if (userData.role !== 'admin' && userData.dailyCount >= 10) { setError("Đã hết lượt (10/10)!"); return; }
+    
     setLoading(true);
     try {
       const prefix = generateRandomString(10);
@@ -333,19 +354,41 @@ export default function App() {
         createdAt: serverTimestamp(),
         magicLink: `${window.location.origin}?restore=${newKey}`
       };
-      await runTransaction(db, async (tx) => {
-        const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'profile', 'info');
-        tx.update(uRef, { dailyCount: increment(1) });
-        const hRef = doc(collection(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'history'));
-        tx.set(hRef, newMail);
-      });
+      
+      // Dùng setDoc đơn giản thay vì transaction để tránh lỗi "Document not exist"
+      const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'profile', 'info');
+      await setDoc(uRef, { dailyCount: increment(1), lastResetDate: getTodayString() }, { merge: true });
+
+      const hRef = doc(collection(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'history'));
+      await setDoc(hRef, newMail);
+      
       setCurrentMailbox(newMail);
       setSuccessMsg("Tạo thành công!");
-    } catch (e) { setError(e.message); } finally { setLoading(false); }
+    } catch (e) { 
+      console.error(e);
+      alert("Lỗi tạo mail: " + e.message); 
+      setError(e.message); 
+    } finally { setLoading(false); }
   };
 
   const handleSelectMailFromHistory = (item) => { setCurrentMailbox(item); setView('dashboard'); };
   const navigateToHome = () => { setView('dashboard'); setIsSidebarOpen(false); };
+
+  const handleTestConnection = async () => {
+    if (!currentMailbox) return;
+    try {
+        await addDoc(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages'), {
+            from: 'System Test',
+            subject: 'Kiểm tra kết nối Firebase',
+            body: 'Kết nối thành công! Web đã sẵn sàng nhận mail.',
+            createdAt: serverTimestamp(),
+            isRead: false
+        });
+        alert("Đã gửi tin nhắn test! Kiểm tra hộp thư đến bên dưới.");
+    } catch (e) {
+        alert("LỖI KẾT NỐI: " + e.message);
+    }
+  };
 
   if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white"><RefreshCw className="animate-spin mr-2" /> Loading...</div>;
 
@@ -356,7 +399,7 @@ export default function App() {
       <div className="md:hidden fixed top-0 w-full bg-gray-900 border-b border-gray-800 z-40 flex items-center justify-between p-4 shadow-lg"><h1 onClick={navigateToHome} className="text-lg font-bold text-blue-400">CloudMail Pro</h1><button onClick={() => setIsSidebarOpen(true)} className="text-white"><Menu /></button></div>
       <Sidebar isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} userData={userData} view={view} setView={setView} handleLogout={handleLogout} navigateToHome={navigateToHome} handleRestoreSidebar={handleRestoreByKey} />
       <main className="flex-1 md:ml-0 pt-16 md:pt-0 overflow-y-auto h-screen bg-gray-900"><div className="p-4 md:p-8">
-         {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={handleCreateMailbox} handleRestoreByKey={handleRestoreByKey} error={error} successMsg={successMsg} currentMailbox={currentMailbox} messages={messages} />}
+         {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={handleCreateMailbox} handleRestoreByKey={handleRestoreByKey} error={error} successMsg={successMsg} currentMailbox={currentMailbox} messages={messages} handleTestConnection={handleTestConnection} />}
          {view === 'history' && <HistoryView mailHistory={mailHistory} onSelectMail={handleSelectMailFromHistory} />}
          {view === 'profile' && <ProfileView userData={userData} newPassword={newPassword} setNewPassword={setNewPassword} handleUpdatePassword={handleUpdatePassword} successMsg={successMsg} />}
       </div></main>
