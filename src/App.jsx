@@ -11,7 +11,7 @@ import {
 } from 'firebase/firestore';
 import { 
   Mail, History, User, LogOut, Menu, X, Copy, RefreshCw, 
-  Shield, Key, Link as LinkIcon, Lock, Globe, ExternalLink, Zap
+  Shield, Key, Link as LinkIcon, Lock, Globe, ExternalLink, Zap, ArrowRight, Search
 } from 'lucide-react';
 
 // --- CẤU HÌNH FIREBASE ---
@@ -59,7 +59,7 @@ const getTodayString = () => new Date().toISOString().split('T')[0];
 
 // --- COMPONENT SIDEBAR ---
 const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, handleLogout, navigateToHome }) => (
-  <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-900 text-white transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:inset-auto md:flex md:flex-col shadow-xl border-r border-gray-800`}>
+  <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-gray-900 text-white transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:inset-auto md:flex md:flex-col shadow-xl border-r border-gray-800`}>
     <div className="p-6 flex justify-between items-center border-b border-gray-800">
       <h1 onClick={navigateToHome} className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent cursor-pointer hover:opacity-80 transition-opacity">
         CloudMail Pro
@@ -89,7 +89,7 @@ const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, han
       )}
     </div>
 
-    <nav className="flex-1 p-4 space-y-2">
+    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
       <button onClick={() => { setView('dashboard'); setIsSidebarOpen(false); }} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${view === 'dashboard' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
         <Mail size={20} /> <span>Hòm thư</span>
       </button>
@@ -111,8 +111,8 @@ const Sidebar = ({ isSidebarOpen, setIsSidebarOpen, userData, view, setView, han
   </div>
 );
 
-// --- COMPONENT AUTH SCREEN (Đã cập nhật) ---
-const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegistering, setIsRegistering, handleAuth, handleAnonymous, handleRestoreByKey, restoreKeyInput, setRestoreKeyInput, error }) => (
+// --- COMPONENT AUTH SCREEN ---
+const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegistering, setIsRegistering, handleAuth, handleAnonymous, error }) => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 font-sans text-gray-100">
     <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700">
       <div className="text-center mb-6">
@@ -122,28 +122,6 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
 
       {error && <div className="mb-4 p-3 bg-red-500/20 text-red-300 rounded-lg text-sm">{error}</div>}
 
-      {/* Phần 1: Khôi phục bằng API Key */}
-      <div className="mb-6 pb-6 border-b border-gray-700">
-        <label className="block text-xs font-bold text-yellow-500 uppercase mb-2">Truy cập nhanh bằng API Key</label>
-        <div className="flex gap-2">
-          <input 
-            type="text" 
-            className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-yellow-500 outline-none"
-            placeholder="Nhập Key (ví dụ: key_abc...)"
-            value={restoreKeyInput}
-            onChange={(e) => setRestoreKeyInput(e.target.value)}
-          />
-          <button 
-            onClick={handleRestoreByKey}
-            disabled={loading}
-            className="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-2 rounded-lg text-sm font-bold disabled:opacity-50"
-          >
-            Vào
-          </button>
-        </div>
-      </div>
-
-      {/* Phần 2: Đăng nhập thường */}
       <form onSubmit={handleAuth} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-400 mb-1">Email</label>
@@ -158,7 +136,6 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
         </button>
       </form>
 
-      {/* Phần 3: Chuyển đổi và Dùng thử */}
       <div className="mt-4 flex flex-col gap-3 text-center">
         <button onClick={() => setIsRegistering(!isRegistering)} className="text-sm text-blue-400 hover:text-blue-300">
           {isRegistering ? 'Đã có tài khoản? Đăng nhập ngay' : 'Chưa có tài khoản? Đăng ký mới'}
@@ -177,70 +154,111 @@ const AuthScreen = ({ email, setEmail, password, setPassword, loading, isRegiste
         >
           <Zap size={18} className="text-yellow-400" /> Dùng ngay không cần đăng ký
         </button>
-        <p className="text-xs text-gray-500">Vẫn giới hạn 10 mail/ngày theo thiết bị</p>
+        <p className="text-xs text-gray-500">Giới hạn 10 mail/ngày</p>
       </div>
     </div>
   </div>
 );
 
-const Dashboard = ({ loading, handleCreateMailbox, error, successMsg, currentMailbox }) => (
-  <div className="p-4 max-w-4xl mx-auto space-y-6">
-    <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700 shadow-xl">
-      <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-white"><Globe className="text-blue-400" /> Hệ thống Mail {DOMAIN_NAME}</h2>
-      <div className="mb-4">
-          <button onClick={handleCreateMailbox} disabled={loading} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transform active:scale-[0.99]">
-            {loading ? <RefreshCw className="animate-spin" /> : <Mail size={24} />} <span className="text-lg">Tạo Email Ngẫu Nhiên Mới</span>
-          </button>
-          <p className="text-center text-gray-500 text-xs mt-3">Hệ thống tự động nhận diện Facebook, TikTok...</p>
-      </div>
-      {error && <p className="text-red-400 text-sm mt-2 text-center">{error}</p>}
-      {successMsg && <p className="text-green-400 text-sm mt-2 text-center">{successMsg}</p>}
-    </div>
-    {currentMailbox ? (
-      <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 shadow-2xl animate-fade-in">
-         <div className="flex justify-between items-center mb-6">
-           <h3 className="text-lg font-bold text-white flex items-center gap-2"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Hòm thư đang hoạt động</h3>
-           <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300 flex items-center gap-1"><Globe size={10} /> {DOMAIN_NAME}</span>
-         </div>
-         <div className="space-y-4">
-           <div className="group relative">
-             <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Email</label>
-             <div className="flex items-center gap-2 mt-1">
-               <code className="flex-1 bg-gray-950 p-3 rounded-lg text-green-400 font-mono text-lg border border-gray-700 select-all">{currentMailbox.email}</code>
-               <button onClick={() => { navigator.clipboard.writeText(currentMailbox.email); alert("Đã copy Email"); }} className="p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white"><Copy size={20} /></button>
-             </div>
-           </div>
-           <div className="group relative">
-             <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">API Key (Mã khôi phục)</label>
-             <div className="flex items-center gap-2 mt-1">
-               <code className="flex-1 bg-gray-950 p-2 rounded-lg text-yellow-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.apiKey}</code>
-               <button onClick={() => { navigator.clipboard.writeText(currentMailbox.apiKey); alert("Đã copy Key"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white"><Copy size={16} /></button>
-             </div>
-           </div>
-           <div className="group relative">
-             <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Magic Link</label>
-             <div className="flex items-center gap-2 mt-1">
-               <code className="flex-1 bg-gray-950 p-2 rounded-lg text-blue-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.magicLink}</code>
-               <button onClick={() => { navigator.clipboard.writeText(currentMailbox.magicLink); alert("Đã copy Link"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white"><Copy size={16} /></button>
-             </div>
-           </div>
-         </div>
-         <div className="mt-8 pt-6 border-t border-gray-700 text-center text-gray-500 text-sm">
-           <div className="flex flex-col items-center justify-center gap-2">
-              <RefreshCw size={24} className="animate-spin text-blue-500 opacity-50"/>
-              <p>Đang chờ tin nhắn đến...</p>
-           </div>
-         </div>
-      </div>
-    ) : (
-      <div className="text-center text-gray-500 py-10">
-        <p>Chưa có mail nào được chọn.</p>
-        <p className="text-xs">Hãy tạo mới hoặc chọn từ lịch sử.</p>
-      </div>
-    )}
-  </div>
-);
+// --- COMPONENT DASHBOARD (ĐÃ THÊM Ô NHẬP KEY) ---
+const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, successMsg, currentMailbox }) => {
+  const [keyInput, setKeyInput] = useState('');
 
+  const onRestore = () => {
+    if(keyInput.trim()) {
+        handleRestoreByKey(keyInput);
+        setKeyInput('');
+    }
+  };
+
+  return (
+    <div className="p-4 max-w-4xl mx-auto space-y-6">
+      <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700 shadow-xl">
+        <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-white"><Globe className="text-blue-400" /> Hệ thống Mail {DOMAIN_NAME}</h2>
+        
+        {/* Nút tạo mail */}
+        <div className="mb-6">
+            <button onClick={handleCreateMailbox} disabled={loading} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transform active:scale-[0.99] transition-all">
+              {loading ? <RefreshCw className="animate-spin" /> : <Mail size={24} />} <span className="text-lg">Tạo Email Ngẫu Nhiên Mới</span>
+            </button>
+            <p className="text-center text-gray-500 text-xs mt-3">Hệ thống tự động nhận diện Facebook, TikTok...</p>
+        </div>
+
+        {/* Ô NHẬP API KEY - MỚI */}
+        <div className="pt-6 border-t border-gray-700">
+            <label className="block text-sm font-bold text-yellow-500 mb-2 flex items-center gap-2">
+                <Key size={16} /> TRUY CẬP LẠI MAIL CŨ
+            </label>
+            <div className="flex gap-2">
+                <input 
+                    type="text" 
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder="Dán mã API Key của bạn vào đây..."
+                    className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:border-yellow-500 focus:ring-1 focus:ring-yellow-500 outline-none transition-colors"
+                />
+                <button 
+                    onClick={onRestore}
+                    disabled={loading}
+                    className="bg-yellow-600 hover:bg-yellow-500 text-white px-6 py-3 rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center gap-2 shadow-lg"
+                >
+                    <ArrowRight size={20} /> <span className="hidden sm:inline">Truy cập</span>
+                </button>
+            </div>
+        </div>
+
+        {error && <p className="text-red-400 text-sm mt-4 text-center bg-red-900/20 p-2 rounded">{error}</p>}
+        {successMsg && <p className="text-green-400 text-sm mt-4 text-center bg-green-900/20 p-2 rounded">{successMsg}</p>}
+      </div>
+
+      {/* Hiển thị Mailbox */}
+      {currentMailbox ? (
+        <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 shadow-2xl animate-fade-in">
+           <div className="flex justify-between items-center mb-6">
+             <h3 className="text-lg font-bold text-white flex items-center gap-2"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Hòm thư đang hoạt động</h3>
+             <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300 flex items-center gap-1"><Globe size={10} /> {DOMAIN_NAME}</span>
+           </div>
+           <div className="space-y-4">
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Email</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-3 rounded-lg text-green-400 font-mono text-lg border border-gray-700 select-all">{currentMailbox.email}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.email); alert("Đã copy Email"); }} className="p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={20} /></button>
+               </div>
+             </div>
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">API Key (Mã khôi phục)</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-2 rounded-lg text-yellow-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.apiKey}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.apiKey); alert("Đã copy Key"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={16} /></button>
+               </div>
+             </div>
+             <div className="group relative">
+               <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Link truy cập nhanh</label>
+               <div className="flex items-center gap-2 mt-1">
+                 <code className="flex-1 bg-gray-950 p-2 rounded-lg text-blue-400 font-mono text-sm border border-gray-700 truncate">{currentMailbox.magicLink}</code>
+                 <button onClick={() => { navigator.clipboard.writeText(currentMailbox.magicLink); alert("Đã copy Link"); }} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-colors"><Copy size={16} /></button>
+               </div>
+             </div>
+           </div>
+           <div className="mt-8 pt-6 border-t border-gray-700 text-center text-gray-500 text-sm">
+             <div className="flex flex-col items-center justify-center gap-2">
+                <RefreshCw size={24} className="animate-spin text-blue-500 opacity-50"/>
+                <p>Đang chờ tin nhắn đến...</p>
+             </div>
+           </div>
+        </div>
+      ) : (
+        <div className="text-center text-gray-500 py-10">
+          <p>Chưa có mail nào được chọn.</p>
+          <p className="text-xs">Hãy tạo mới, chọn từ lịch sử hoặc nhập API Key ở trên.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- COMPONENT HISTORY ---
 const HistoryView = ({ mailHistory, onSelectMail }) => (
   <div className="p-4 max-w-5xl mx-auto">
     <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><History className="text-purple-400" /> Lịch sử</h2>
@@ -266,7 +284,7 @@ const HistoryView = ({ mailHistory, onSelectMail }) => (
                 <td className="px-6 py-4 text-xs">{formatDate(item.createdAt)}</td>
               </tr>
             ))}
-            {mailHistory.length === 0 && <tr><td colSpan="4" className="px-6 py-8 text-center text-gray-500">Chưa có lịch sử.</td></tr>}
+            {mailHistory.length === 0 && <tr><td colSpan="4" className="px-6 py-8 text-center text-gray-500">Trống.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -274,6 +292,7 @@ const HistoryView = ({ mailHistory, onSelectMail }) => (
   </div>
 );
 
+// --- COMPONENT PROFILE ---
 const ProfileView = ({ userData, newPassword, setNewPassword, handleUpdatePassword, successMsg }) => (
   <div className="p-4 max-w-2xl mx-auto space-y-6">
     <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><User className="text-blue-400" /> Tài khoản</h2>
@@ -311,7 +330,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
-  
   const [view, setView] = useState('auth');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -321,12 +339,11 @@ export default function App() {
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [restoreKeyInput, setRestoreKeyInput] = useState(''); // Ô nhập Key
-
+  
   const [currentMailbox, setCurrentMailbox] = useState(null);
   const [mailHistory, setMailHistory] = useState([]);
 
-  // TỰ ĐỘNG CÀI GIAO DIỆN
+  // Tự động cài giao diện Tailwind
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -341,7 +358,6 @@ export default function App() {
       setUser(currentUser);
       if (currentUser) {
         try {
-          // Logic cho cả user thường và user ẩn danh
           const userRef = doc(db, 'artifacts', APP_ID_DB, 'users', currentUser.uid, 'profile', 'info');
           const snap = await getDoc(userRef);
           if (!snap.exists()) {
@@ -349,7 +365,7 @@ export default function App() {
               role: 'user', 
               dailyCount: 0, 
               lastResetDate: getTodayString(), 
-              email: currentUser.email || null // Lưu email null nếu là ẩn danh
+              email: currentUser.email || null
             });
           }
           onSnapshot(userRef, (doc) => setUserData(doc.data()));
@@ -371,7 +387,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Đăng nhập thường
   const handleAuth = async (e) => {
     e.preventDefault(); setError(''); setLoading(true);
     try {
@@ -380,50 +395,33 @@ export default function App() {
     } catch (err) { setError(err.message); setLoading(false); }
   };
 
-  // Đăng nhập ẩn danh (Khách)
   const handleAnonymous = async () => {
     setError(''); setLoading(true);
-    try {
-      await signInAnonymously(auth);
-    } catch (err) { setError("Lỗi chế độ khách: " + err.message); setLoading(false); }
+    try { await signInAnonymously(auth); } 
+    catch (err) { setError("Lỗi chế độ khách: " + err.message); setLoading(false); }
   };
 
-  // Truy cập bằng API Key
-  const handleRestoreByKey = async () => {
-    if (!restoreKeyInput.trim()) {
-      alert("Vui lòng nhập API Key!");
-      return;
-    }
+  const handleRestoreByKey = async (keyInput) => {
+    if (!keyInput || !keyInput.trim()) { alert("Vui lòng nhập API Key!"); return; }
     setLoading(true);
-    // Logic: Nếu chưa đăng nhập thì đăng nhập ẩn danh trước để vào hệ thống
-    // Sau đó giả lập hiển thị mail tương ứng với Key (Trong thực tế cần query DB)
     try {
-      if (!user) {
-        await signInAnonymously(auth);
-      }
-      // Giả lập tìm thấy mail
+      if (!user) await signInAnonymously(auth);
+      // Giả lập tìm thấy mail từ Key (Trong thực tế cần query DB where apiKey == keyInput)
       const recoveredMail = {
         email: `recovered_${Math.floor(Math.random()*1000)}@${DOMAIN_NAME}`,
-        apiKey: restoreKeyInput,
+        apiKey: keyInput,
         magicLink: `${window.location.origin}?restore=old`,
         service: 'Khôi phục từ Key',
         createdAt: new Date()
       };
       setCurrentMailbox(recoveredMail);
       setView('dashboard');
-      alert("Đã khôi phục giao diện mail!");
-    } catch (err) {
-      alert("Lỗi: " + err.message);
-    } finally {
-      setLoading(false);
-    }
+      setSuccessMsg("Khôi phục mail thành công!");
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err) { alert("Lỗi: " + err.message); } finally { setLoading(false); }
   };
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    setIsSidebarOpen(false);
-    setCurrentMailbox(null);
-  };
+  const handleLogout = async () => { await signOut(auth); setIsSidebarOpen(false); setCurrentMailbox(null); };
 
   const handleUpdatePassword = async () => {
     if (!newPassword) return;
@@ -455,6 +453,7 @@ export default function App() {
       
       setCurrentMailbox(newMailData);
       setSuccessMsg("Tạo thành công!");
+      setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   };
 
@@ -475,9 +474,6 @@ export default function App() {
       isRegistering={isRegistering} setIsRegistering={setIsRegistering} 
       handleAuth={handleAuth} 
       handleAnonymous={handleAnonymous}
-      handleRestoreByKey={handleRestoreByKey}
-      restoreKeyInput={restoreKeyInput}
-      setRestoreKeyInput={setRestoreKeyInput}
       error={error} 
     />
   );
@@ -489,11 +485,15 @@ export default function App() {
         <button onClick={() => setIsSidebarOpen(true)} className="text-white"><Menu /></button>
       </div>
 
-      <Sidebar isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} userData={userData} view={view} setView={setView} handleLogout={handleLogout} navigateToHome={navigateToHome} />
+      <Sidebar 
+        isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen}
+        userData={userData} view={view} setView={setView}
+        handleLogout={handleLogout} navigateToHome={navigateToHome}
+      />
 
       <main className="flex-1 md:ml-0 pt-16 md:pt-0 overflow-y-auto h-screen bg-gray-900">
         <div className="p-4 md:p-8">
-           {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={handleCreateMailbox} error={error} successMsg={successMsg} currentMailbox={currentMailbox} />}
+           {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={handleCreateMailbox} handleRestoreByKey={handleRestoreByKey} error={error} successMsg={successMsg} currentMailbox={currentMailbox} />}
            {view === 'history' && <HistoryView mailHistory={mailHistory} onSelectMail={handleSelectMailFromHistory} />}
            {view === 'profile' && <ProfileView userData={userData} newPassword={newPassword} setNewPassword={setNewPassword} handleUpdatePassword={handleUpdatePassword} successMsg={successMsg} />}
         </div>
