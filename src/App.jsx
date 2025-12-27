@@ -120,7 +120,12 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
       <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700 shadow-xl">
         <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-white"><Globe className="text-blue-400" /> Hệ thống Mail {DOMAIN_NAME}</h2>
         <div className="mb-6">
-            <button onClick={handleCreateMailbox} disabled={loading} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transform active:scale-[0.99] transition-all">
+            <button 
+              // Sửa lỗi ở đây: Truyền null để hàm tự lấy user hiện tại
+              onClick={() => handleCreateMailbox(null, null)} 
+              disabled={loading} 
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transform active:scale-[0.99] transition-all"
+            >
               {loading ? <RefreshCw className="animate-spin" /> : <Mail size={24} />} <span className="text-lg">Tạo Email Ngẫu Nhiên Mới</span>
             </button>
         </div>
@@ -131,7 +136,7 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
                 <button onClick={onRestore} disabled={loading} className="bg-yellow-600 hover:bg-yellow-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2"><ArrowRight size={20} /> <span className="hidden sm:inline">Truy cập</span></button>
             </div>
         </div>
-        {error && <div className="mt-4 p-3 bg-red-900/50 text-red-200 text-sm rounded border border-red-700 flex items-center gap-2"><AlertTriangle size={16}/> {error}</div>}
+        {error && <p className="text-red-400 text-sm mt-4 text-center bg-red-900/20 p-2 rounded">{error}</p>}
         {successMsg && <p className="text-green-400 text-sm mt-4 text-center bg-green-900/20 p-2 rounded">{successMsg}</p>}
       </div>
 
@@ -255,7 +260,7 @@ export default function App() {
   const [mailHistory, setMailHistory] = useState([]);
   const [messages, setMessages] = useState([]);
   
-  // Dùng ref để kiểm soát việc auto-create chỉ chạy 1 lần
+  // Dùng ref để kiểm soát auto-create
   const autoCreatedRef = useRef(false);
 
   useEffect(() => {
@@ -284,40 +289,35 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
-        setView('dashboard'); // Vào thẳng dashboard
+        setView('dashboard'); 
         try {
-          // Logic load dữ liệu User an toàn hơn
+          // Logic User Data An Toàn (Có Fallback nếu lỗi)
           const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'profile', 'info');
           const unsubUser = onSnapshot(uRef, (docSnap) => {
-             // Nếu chưa có doc, tự tạo
              if (!docSnap.exists()) {
                 setDoc(uRef, { role: 'user', dailyCount: 0, lastResetDate: getTodayString(), email: u.email || null });
-                setUserData({ role: 'user', dailyCount: 0 }); // Set tạm
+                setUserData({ role: 'user', dailyCount: 0 }); 
              } else {
                 setUserData(docSnap.data());
              }
           }, (err) => {
              console.error("Lỗi đọc User:", err);
-             // Nếu lỗi permission, vẫn set user data giả để app chạy
-             if(err.code === 'permission-denied') {
-               setError("Lỗi quyền truy cập! Hãy vào Firebase Console mở khóa Database.");
-               setUserData({ role: 'user', dailyCount: 0 });
-             }
+             // Vẫn cho chạy tiếp dù lỗi permission
+             setUserData({ role: 'user', dailyCount: 0 });
           });
 
-          // Logic load lịch sử
+          // Logic History & Auto Create
           const hRef = collection(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'history');
           const q = query(hRef, orderBy('createdAt', 'desc'));
           const unsubHist = onSnapshot(q, (s) => {
             const hist = s.docs.map(d => ({ id: d.id, ...d.data() }));
             setMailHistory(hist);
-            
-            // TỰ ĐỘNG TẠO MAIL NẾU CHƯA CÓ VÀ MỚI VÀO (Chỉ chạy 1 lần)
+            // TỰ ĐỘNG TẠO MAIL NẾU CHƯA CÓ
             if (hist.length === 0 && !autoCreatedRef.current && !currentMailbox) {
                autoCreatedRef.current = true;
-               handleCreateMailbox(u, { role: 'user', dailyCount: 0 }); // Truyền trực tiếp user & data để ko phụ thuộc state
+               handleCreateMailbox(u, { role: 'user', dailyCount: 0 });
             }
-          }, (err) => console.log("Chưa có lịch sử hoặc lỗi quyền"));
+          }, (err) => console.log("Lỗi lịch sử, bỏ qua..."));
 
         } catch (e) { console.error(e); }
       } else { setUserData(null); setMailHistory([]); setView('auth'); }
@@ -328,9 +328,16 @@ export default function App() {
 
   useEffect(() => {
     if (!currentMailbox) { setMessages([]); return; }
-    const q = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (s) => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return () => unsub();
+    const messagesRef = collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages');
+    const q = query(messagesRef, orderBy('createdAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const newMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(newMsgs);
+    }, (error) => {
+      console.error("Lỗi đọc tin nhắn:", error);
+    });
+    return () => unsubscribe();
   }, [currentMailbox]);
 
   const handleAuth = async (e) => { e.preventDefault(); setError(''); setLoading(true); try { if (isRegistering) await createUserWithEmailAndPassword(auth, email, password); else await signInWithEmailAndPassword(auth, email, password); } catch (e) { setError(e.message); setLoading(false); } };
@@ -358,12 +365,19 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setIsSidebarOpen(false); setCurrentMailbox(null); };
   const handleUpdatePassword = async () => { if (!newPassword) return; try { await updatePassword(user, newPassword); setSuccessMsg("OK!"); } catch (e) { setError(e.message); } };
 
-  // --- HÀM TẠO MAIL (ĐÃ SỬA ĐỂ TỰ CHẠY) ---
-  const handleCreateMailbox = async (currentUser = user, currentData = userData) => {
-    if (!currentUser) return;
+  // --- HÀM TẠO MAIL ĐÃ SỬA LỖI ---
+  const handleCreateMailbox = async (paramUser = null, paramData = null) => {
+    // Ưu tiên dùng tham số truyền vào (để chạy auto), nếu không thì dùng state (để chạy thủ công)
+    const currentUser = paramUser || user;
+    const currentData = paramData || userData;
+
+    if (!currentUser) { 
+        // Nếu bấm nút thủ công mà chưa có user
+        if(!paramUser) alert("Bạn chưa đăng nhập!"); 
+        return; 
+    }
     
-    // Bỏ qua check dữ liệu nếu đang auto-create (để tránh lỗi wait)
-    // Nếu là bấm nút thủ công thì mới check
+    // Bỏ qua check dữ liệu nếu đang auto-create lần đầu
     if (!autoCreatedRef.current && currentData && currentData.role !== 'admin' && currentData.dailyCount >= 10) { 
         setError("Đã hết lượt (10/10)!"); 
         return; 
@@ -390,9 +404,8 @@ export default function App() {
       setSuccessMsg("Tạo thành công!");
     } catch (e) { 
       console.error(e);
-      // Nếu lỗi permission, vẫn báo lỗi
       if(e.code === 'permission-denied') {
-          setError("Lỗi quyền! Chưa mở khóa Database.");
+          setError("Lỗi quyền! Hãy vào Firebase mở khóa Rules.");
       } else {
           setError(e.message); 
       }
@@ -418,7 +431,7 @@ export default function App() {
     }
   };
 
-  if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white"><RefreshCw className="animate-spin mr-2" /> Đang vào...</div>;
+  if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white"><RefreshCw className="animate-spin mr-2" /> Loading...</div>;
 
   if (!user) return <AuthScreen email={email} setEmail={setEmail} password={password} setPassword={setPassword} loading={loading} isRegistering={isRegistering} setIsRegistering={setIsRegistering} handleAuth={handleAuth} handleAnonymous={handleAnonymous} handleRestoreByKey={() => handleRestoreByKey()} restoreKeyInput={restoreKeyInput} setRestoreKeyInput={setRestoreKeyInput} error={error} />;
 
@@ -435,5 +448,4 @@ export default function App() {
   );
 }
 
-Hãy nhớ BƯỚC 1 (Mở khóa Rules) là quan trọng nhất nhé. Nếu không mở khóa thì web có sửa thế nào cũng vẫn sẽ báo lỗi Permission.
 
