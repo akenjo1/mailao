@@ -24,7 +24,7 @@ const firebaseConfig = {
   appId: "1:904960606200:web:ac40d9246431fb8f57200d"
 };
 
-const DOMAIN_NAME = "somail.online";
+const DOMAIN_NAME = "sogmail.online";
 const APP_ID_DB = 'cloudmail-pro-production';
 
 // Khởi tạo Firebase
