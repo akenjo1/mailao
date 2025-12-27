@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
@@ -131,7 +131,7 @@ const Dashboard = ({ loading, handleCreateMailbox, handleRestoreByKey, error, su
                 <button onClick={onRestore} disabled={loading} className="bg-yellow-600 hover:bg-yellow-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2"><ArrowRight size={20} /> <span className="hidden sm:inline">Truy cập</span></button>
             </div>
         </div>
-        {error && <p className="text-red-400 text-sm mt-4 text-center bg-red-900/20 p-2 rounded">{error}</p>}
+        {error && <div className="mt-4 p-3 bg-red-900/50 text-red-200 text-sm rounded border border-red-700 flex items-center gap-2"><AlertTriangle size={16}/> {error}</div>}
         {successMsg && <p className="text-green-400 text-sm mt-4 text-center bg-green-900/20 p-2 rounded">{successMsg}</p>}
       </div>
 
@@ -254,6 +254,9 @@ export default function App() {
   const [currentMailbox, setCurrentMailbox] = useState(null);
   const [mailHistory, setMailHistory] = useState([]);
   const [messages, setMessages] = useState([]);
+  
+  // Dùng ref để kiểm soát việc auto-create chỉ chạy 1 lần
+  const autoCreatedRef = useRef(false);
 
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
@@ -281,29 +284,41 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
+        setView('dashboard'); // Vào thẳng dashboard
         try {
+          // Logic load dữ liệu User an toàn hơn
           const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'profile', 'info');
-          const snap = await getDoc(uRef);
-          
-          // TỰ ĐỘNG TẠO PROFILE NẾU CHƯA CÓ
-          if (!snap.exists()) {
-            const initialData = { 
-              role: 'user', 
-              dailyCount: 0, 
-              lastResetDate: getTodayString(), 
-              email: u.email || null 
-            };
-            await setDoc(uRef, initialData);
-            setUserData(initialData); // Cập nhật state ngay lập tức
-          } else {
-            // Lắng nghe thay đổi
-            onSnapshot(uRef, (d) => setUserData(d.data()));
-          }
+          const unsubUser = onSnapshot(uRef, (docSnap) => {
+             // Nếu chưa có doc, tự tạo
+             if (!docSnap.exists()) {
+                setDoc(uRef, { role: 'user', dailyCount: 0, lastResetDate: getTodayString(), email: u.email || null });
+                setUserData({ role: 'user', dailyCount: 0 }); // Set tạm
+             } else {
+                setUserData(docSnap.data());
+             }
+          }, (err) => {
+             console.error("Lỗi đọc User:", err);
+             // Nếu lỗi permission, vẫn set user data giả để app chạy
+             if(err.code === 'permission-denied') {
+               setError("Lỗi quyền truy cập! Hãy vào Firebase Console mở khóa Database.");
+               setUserData({ role: 'user', dailyCount: 0 });
+             }
+          });
 
+          // Logic load lịch sử
           const hRef = collection(db, 'artifacts', APP_ID_DB, 'users', u.uid, 'history');
           const q = query(hRef, orderBy('createdAt', 'desc'));
-          onSnapshot(q, (s) => setMailHistory(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-          setView('dashboard');
+          const unsubHist = onSnapshot(q, (s) => {
+            const hist = s.docs.map(d => ({ id: d.id, ...d.data() }));
+            setMailHistory(hist);
+            
+            // TỰ ĐỘNG TẠO MAIL NẾU CHƯA CÓ VÀ MỚI VÀO (Chỉ chạy 1 lần)
+            if (hist.length === 0 && !autoCreatedRef.current && !currentMailbox) {
+               autoCreatedRef.current = true;
+               handleCreateMailbox(u, { role: 'user', dailyCount: 0 }); // Truyền trực tiếp user & data để ko phụ thuộc state
+            }
+          }, (err) => console.log("Chưa có lịch sử hoặc lỗi quyền"));
+
         } catch (e) { console.error(e); }
       } else { setUserData(null); setMailHistory([]); setView('auth'); }
       setLoading(false);
@@ -313,17 +328,9 @@ export default function App() {
 
   useEffect(() => {
     if (!currentMailbox) { setMessages([]); return; }
-    // QUAN TRỌNG: Đường dẫn này PHẢI khớp với Worker
-    const messagesRef = collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages');
-    const q = query(messagesRef, orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newMsgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMessages(newMsgs);
-    }, (error) => {
-      console.error("Lỗi đọc tin nhắn:", error);
-    });
-    return () => unsubscribe();
+    const q = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'emails', currentMailbox.email, 'messages'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, (s) => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
   }, [currentMailbox]);
 
   const handleAuth = async (e) => { e.preventDefault(); setError(''); setLoading(true); try { if (isRegistering) await createUserWithEmailAndPassword(auth, email, password); else await signInWithEmailAndPassword(auth, email, password); } catch (e) { setError(e.message); setLoading(false); } };
@@ -351,17 +358,16 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setIsSidebarOpen(false); setCurrentMailbox(null); };
   const handleUpdatePassword = async () => { if (!newPassword) return; try { await updatePassword(user, newPassword); setSuccessMsg("OK!"); } catch (e) { setError(e.message); } };
 
-  // --- HÀM TẠO MAIL MỚI (CẬP NHẬT: AUTO FIX PROFILE) ---
-  const handleCreateMailbox = async () => {
-    if (!user) { alert("Bạn chưa đăng nhập!"); return; }
+  // --- HÀM TẠO MAIL (ĐÃ SỬA ĐỂ TỰ CHẠY) ---
+  const handleCreateMailbox = async (currentUser = user, currentData = userData) => {
+    if (!currentUser) return;
     
-    // Nếu userData chưa load kịp, tự tạo dữ liệu mặc định để không lỗi
-    let currentUserData = userData;
-    if (!currentUserData) {
-       currentUserData = { role: 'user', dailyCount: 0 }; 
+    // Bỏ qua check dữ liệu nếu đang auto-create (để tránh lỗi wait)
+    // Nếu là bấm nút thủ công thì mới check
+    if (!autoCreatedRef.current && currentData && currentData.role !== 'admin' && currentData.dailyCount >= 10) { 
+        setError("Đã hết lượt (10/10)!"); 
+        return; 
     }
-
-    if (currentUserData.role !== 'admin' && currentUserData.dailyCount >= 10) { setError("Đã hết lượt (10/10)!"); return; }
     
     setLoading(true);
     try {
@@ -374,19 +380,22 @@ export default function App() {
         magicLink: `${window.location.origin}?restore=${newKey}`
       };
       
-      const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'profile', 'info');
-      // Dùng setDoc với merge: true để đảm bảo không lỗi nếu doc chưa có
+      const uRef = doc(db, 'artifacts', APP_ID_DB, 'users', currentUser.uid, 'profile', 'info');
       await setDoc(uRef, { dailyCount: increment(1), lastResetDate: getTodayString() }, { merge: true });
 
-      const hRef = doc(collection(db, 'artifacts', APP_ID_DB, 'users', user.uid, 'history'));
+      const hRef = doc(collection(db, 'artifacts', APP_ID_DB, 'users', currentUser.uid, 'history'));
       await setDoc(hRef, newMail);
       
       setCurrentMailbox(newMail);
       setSuccessMsg("Tạo thành công!");
     } catch (e) { 
       console.error(e);
-      alert("Lỗi tạo mail: " + e.message); 
-      setError(e.message); 
+      // Nếu lỗi permission, vẫn báo lỗi
+      if(e.code === 'permission-denied') {
+          setError("Lỗi quyền! Chưa mở khóa Database.");
+      } else {
+          setError(e.message); 
+      }
     } finally { setLoading(false); }
   };
 
@@ -409,7 +418,7 @@ export default function App() {
     }
   };
 
-  if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white"><RefreshCw className="animate-spin mr-2" /> Loading...</div>;
+  if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white"><RefreshCw className="animate-spin mr-2" /> Đang vào...</div>;
 
   if (!user) return <AuthScreen email={email} setEmail={setEmail} password={password} setPassword={setPassword} loading={loading} isRegistering={isRegistering} setIsRegistering={setIsRegistering} handleAuth={handleAuth} handleAnonymous={handleAnonymous} handleRestoreByKey={() => handleRestoreByKey()} restoreKeyInput={restoreKeyInput} setRestoreKeyInput={setRestoreKeyInput} error={error} />;
 
@@ -418,7 +427,7 @@ export default function App() {
       <div className="md:hidden fixed top-0 w-full bg-gray-900 border-b border-gray-800 z-40 flex items-center justify-between p-4 shadow-lg"><h1 onClick={navigateToHome} className="text-lg font-bold text-blue-400">CloudMail Pro</h1><button onClick={() => setIsSidebarOpen(true)} className="text-white"><Menu /></button></div>
       <Sidebar isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} userData={userData} view={view} setView={setView} handleLogout={handleLogout} navigateToHome={navigateToHome} handleRestoreSidebar={handleRestoreByKey} />
       <main className="flex-1 md:ml-0 pt-16 md:pt-0 overflow-y-auto h-screen bg-gray-900"><div className="p-4 md:p-8">
-         {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={handleCreateMailbox} handleRestoreByKey={handleRestoreByKey} error={error} successMsg={successMsg} currentMailbox={currentMailbox} messages={messages} handleTestConnection={handleTestConnection} />}
+         {view === 'dashboard' && <Dashboard loading={loading} handleCreateMailbox={() => handleCreateMailbox()} handleRestoreByKey={handleRestoreByKey} error={error} successMsg={successMsg} currentMailbox={currentMailbox} messages={messages} handleTestConnection={handleTestConnection} />}
          {view === 'history' && <HistoryView mailHistory={mailHistory} onSelectMail={handleSelectMailFromHistory} />}
          {view === 'profile' && <ProfileView userData={userData} newPassword={newPassword} setNewPassword={setNewPassword} handleUpdatePassword={handleUpdatePassword} successMsg={successMsg} />}
       </div></main>
@@ -426,4 +435,5 @@ export default function App() {
   );
 }
 
+Hãy nhớ BƯỚC 1 (Mở khóa Rules) là quan trọng nhất nhé. Nếu không mở khóa thì web có sửa thế nào cũng vẫn sẽ báo lỗi Permission.
 
