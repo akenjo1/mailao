@@ -25,13 +25,14 @@ import {
 } from "firebase/firestore";
 
 // --- CẤU HÌNH FIREBASE ---
-// BẠN HÃY THAY THÔNG TIN NÀY BẰNG CỦA BẠN LẤY TỪ FIREBASE CONSOLE
+// ĐÃ CẬP NHẬT PROJECT ID: my-temp-mail-de60c
 const firebaseConfig = {
-  apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60",
-  authDomain: " my-temp-mail-de60c.firebaseapp.com",
+  // QUAN TRỌNG: Bạn phải lấy API Key thật trong Project Settings trên Firebase Console
+  apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60", 
+  authDomain: "my-temp-mail-de60c.firebaseapp.com",
   projectId: "my-temp-mail-de60c",
-  storageBucket: "my-temp-mail-de60c.firebasestorage.app",
-  messagingSenderId: " 466454763740",
+  storageBucket: "my-temp-mail-de60c.firebasestorage.app", 
+  messagingSenderId: "466454763740",
   appId: "1:466454763740:web:b7a9563589be2f732bbc19"
 };
 
