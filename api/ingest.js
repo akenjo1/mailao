@@ -1,61 +1,73 @@
-// api/ingest.js
 import admin from "firebase-admin";
 
-function mustEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
+function getAdmin() {
+  if (admin.apps.length) return admin;
 
-function initAdmin() {
-  if (admin.apps.length) return;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT env");
 
-  const projectId = mustEnv("FIREBASE_PROJECT_ID");
-  const clientEmail = mustEnv("FIREBASE_CLIENT_EMAIL");
-  const privateKey = mustEnv("FIREBASE_PRIVATE_KEY").replace(/\\n/g, "\n");
+  const sa = JSON.parse(raw);
+
+  // an toàn với trường hợp private_key bị xuống dòng dạng \n
+  if (sa.private_key) sa.private_key = sa.private_key.replace(/\\n/g, "\n");
 
   admin.initializeApp({
-    credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
+    credential: admin.credential.cert(sa),
   });
+
+  return admin;
+}
+
+function cleanSnippet(s = "") {
+  return String(s || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
 }
 
 export default async function handler(req, res) {
   try {
-    // chỉ nhận POST
-    if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-    // check secret
-    const secret = mustEnv("INGEST_SECRET");
-    const got = req.headers["x-ingest-secret"];
-    if (got !== secret) return res.status(401).send("Unauthorized");
+    // bảo mật: worker phải gửi đúng secret
+    const secret = req.headers["x-ingest-secret"];
+    if (!process.env.INGEST_SECRET || secret !== process.env.INGEST_SECRET) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
 
-    initAdmin();
-    const db = admin.firestore();
+    const a = getAdmin();
+    const db = a.firestore();
 
     const body = req.body || {};
     const to = String(body.to || "").toLowerCase().trim();
+    if (!to) return res.status(400).json({ ok: false, error: "Missing `to`" });
 
-    if (!to) return res.status(400).json({ ok: false, error: "Missing to" });
+    const receivedAtIso = body.receivedAt || new Date().toISOString();
+    const receivedAtDate = new Date(receivedAtIso);
+    const timestamp = a.firestore.Timestamp.fromDate(isNaN(receivedAtDate.getTime()) ? new Date() : receivedAtDate);
+
+    // TTL: mặc định 24h (bạn có thể chỉnh)
+    const expiresAt = a.firestore.Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
 
     const docData = {
       to,
       from: String(body.from || ""),
       fromName: String(body.fromName || ""),
-      fromDisplay: String(body.fromName || body.from || "").trim(),
       subject: String(body.subject || "(No subject)"),
       dateHeader: String(body.dateHeader || ""),
-      receivedAt: String(body.receivedAt || new Date().toISOString()),
+      receivedAt: receivedAtIso,
+      timestamp, // để sort
       html: String(body.html || ""),
       text: String(body.text || ""),
       raw: String(body.raw || ""),
-      // timestamp chuẩn để sort
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      snippet: cleanSnippet(body.text || body.html || body.raw || ""),
+      expiresAt, // cho cleanup / TTL
+      createdAt: a.firestore.FieldValue.serverTimestamp(),
     };
 
-    // lưu vào collection emails (frontend đang query where("to","==",currentAddress))
-    await db.collection("emails").add(docData);
-
-    return res.status(200).json({ ok: true });
+    // auto-id
+    const ref = await db.collection("emails").add(docData);
+    return res.status(200).json({ ok: true, id: ref.id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
