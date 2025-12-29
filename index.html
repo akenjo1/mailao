@@ -1,16 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="https://phosphoricons.com/assets/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CloudMail Pro</title>
-    <!-- Tailwind nạp cứng ở đây để không bao giờ bị mất giao diện -->
+    <title>ADBV Mail - Hộp thư ảo tên miền riêng</title>
+    
+    <!-- 1. Tailwind CSS (Styling nhanh) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Phosphor Icons (Icon đẹp) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- 3. Font chữ & Hiệu ứng -->
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+      body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+      
+      /* Animation */
+      .fade-in { animation: fadeIn 0.5s ease-in-out; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    
+    <!-- Point to the React entry file -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
-
-
