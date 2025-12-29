@@ -139,8 +139,11 @@ function pruneGuestHistory() {
 /** ✅ NEW: tách body sạch từ raw email */
 function extractBodyFromRaw(raw = "") {
   if (!raw) return "";
-  const idx = raw.indexOf("\n\n");
-  return idx >= 0 ? raw.slice(idx + 2) : raw;
+  // hỗ trợ cả \r\n\r\n
+  const idx = raw.indexOf("\r\n\r\n");
+  if (idx >= 0) return raw.slice(idx + 4);
+  const idx2 = raw.indexOf("\n\n");
+  return idx2 >= 0 ? raw.slice(idx2 + 2) : raw;
 }
 
 /** ✅ NEW: làm gọn nội dung để preview/hiển thị */
@@ -778,11 +781,17 @@ export default function App() {
     return guestCount || 0;
   }, [user, userData, guestCount]);
 
+  // =========================
+  // Admin function
+  // =========================
   const setUserRoleByUid = async (targetUid, role) => {
     if (!user || user.uid !== OWNER_UID) throw new Error("Không có quyền OWNER");
     await updateDoc(doc(db, "users", targetUid), { role });
   };
 
+  // =========================
+  // Restore từ API Key (Magic Link)
+  // =========================
   const restoreFromKey = async (key, manual = false) => {
     const k = (key || "").trim();
     if (!k) return;
@@ -814,13 +823,18 @@ export default function App() {
 
         localStorage.setItem("skipAuth", "1");
         setIsAuthScreen(false);
+
+        // xóa param URL
         window.history.replaceState({}, document.title, "/");
 
         if (manual) alert(`Đã khôi phục thành công: ${address}`);
         return;
       }
-    } catch {}
+    } catch {
+      // ignore
+    }
 
+    // fallback: guestHistory local
     const localHist = JSON.parse(localStorage.getItem("guestHistory") || "[]");
     const localMatch = localHist.find((h) => h.apiKey === k);
     if (localMatch?.address) {
@@ -845,15 +859,22 @@ export default function App() {
     if (manual) alert("Không tìm thấy API Key này!");
   };
 
+  // =========================
+  // Refresh inbox (không reload trang)
+  // =========================
   const refreshInbox = (e) => {
     e?.preventDefault?.();
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 800);
   };
 
+  // =========================
+  // Limit check (Guest + User thường)
+  // =========================
   const checkLimitAndBump = async () => {
     if (isVip) return true;
 
+    // Guest
     if (!user) {
       const today = todayKey();
       const local = JSON.parse(localStorage.getItem("guestLimit") || "{}");
@@ -871,6 +892,7 @@ export default function App() {
       return true;
     }
 
+    // User thường
     try {
       const today = todayKey();
       const userRef = doc(db, "users", user.uid);
@@ -900,6 +922,9 @@ export default function App() {
     }
   };
 
+  // =========================
+  // Reserve email (đảm bảo không trùng)
+  // =========================
   const reserveAddress = async (addressLower) => {
     const ref = doc(db, "reserved_addresses", addressLower);
     try {
@@ -918,6 +943,9 @@ export default function App() {
     }
   };
 
+  // =========================
+  // Create mail
+  // =========================
   const handleCreateMail = async (custom = null) => {
     const ok = await checkLimitAndBump();
     if (!ok) return;
@@ -1026,6 +1054,9 @@ export default function App() {
     }
   };
 
+  // =========================
+  // Logout
+  // =========================
   const handleLogout = async () => {
     await signOut(auth);
     localStorage.removeItem("currentSession");
@@ -1037,9 +1068,13 @@ export default function App() {
     setIsAuthScreen(false);
   };
 
+  // =========================
+  // INIT
+  // =========================
   useEffect(() => {
     pruneGuestHistory();
 
+    // Check magic link
     const magicKey = getMagicKeyFromUrl();
     if (magicKey) restoreFromKey(magicKey);
 
@@ -1084,6 +1119,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // =========================
+  // Listen inbox + auto update "service"
+  // =========================
   useEffect(() => {
     if (!currentAddress) return;
 
@@ -1326,6 +1364,7 @@ export default function App() {
                 <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
               </button>
 
+              {/* RESTORE INPUT luôn hiển thị khi chưa có mail */}
               {!currentAddress && (
                 <div className="mt-4 pt-4 border-t flex gap-2">
                   <input
@@ -1474,11 +1513,9 @@ export default function App() {
                                   : "Vừa xong"}
                               </span>
                             </div>
-                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10">
-                              {mail.subject || "(No subject)"}
-                            </p>
+                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10">{mail.subject || "(No subject)"}</p>
 
-                            {/* ✅ NEW: preview đã lọc */}
+                            {/* ✅ preview gọn */}
                             <p className="text-sm text-gray-500 line-clamp-2 pl-10">
                               {cleanMailText(mail.body || "")}
                             </p>
@@ -1489,7 +1526,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ✅ NEW: Modal xem mail */}
+                {/* ✅ POPUP xem mail */}
                 {selectedMail && (
                   <>
                     <div className="fixed inset-0 bg-black/40 z-[60]" onClick={() => setSelectedMail(null)} />
@@ -1532,9 +1569,7 @@ export default function App() {
 
                         <div className="p-4 max-h-[70vh] overflow-auto">
                           <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
-                            {viewRaw
-                              ? (selectedMail.body || "")
-                              : cleanMailText(selectedMail.body || "")}
+                            {viewRaw ? (selectedMail.body || "") : cleanMailText(selectedMail.body || "")}
                           </pre>
                         </div>
                       </div>
