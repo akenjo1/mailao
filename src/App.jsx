@@ -19,7 +19,6 @@ import {
   query, 
   where, 
   onSnapshot, 
-  orderBy, 
   doc, 
   setDoc, 
   getDoc,
@@ -45,7 +44,6 @@ const db = getFirestore(app);
 const DOMAIN = "adbv.io.vn"; 
 
 // --- CẤU HÌNH QUYỀN CHỦ SỞ HỮU (OWNER) ---
-// BẠN PHẢI THAY UID NÀY BẰNG UID CỦA CHÍNH BẠN (Lấy trong Firebase Authentication)
 const OWNER_UID = "9pWfn0s8LjTGFZPIrchUEUkigoB3"; 
 
 // --- CÁC COMPONENT CON ---
@@ -63,17 +61,23 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
   const [loading, setLoading] = useState(false);
   const [viewForgot, setViewForgot] = useState(false);
 
+  // Đăng nhập
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
+    setError(''); setLoading(true);
     try {
       let loginEmail = inputLogin;
+      // Nếu nhập username, tìm email tương ứng trong Firestore
       if (!inputLogin.includes('@')) {
-        const q = query(collection(db, "users"), where("username", "==", inputLogin));
-        const querySnapshot = await getDocs(q);
-        if (querySnapshot.empty) throw new Error("Tên tài khoản không tồn tại!");
-        loginEmail = querySnapshot.docs[0].data().email;
+        try {
+            const q = query(collection(db, "users"), where("username", "==", inputLogin));
+            const querySnapshot = await getDocs(q);
+            if (querySnapshot.empty) throw new Error("Tên tài khoản không tồn tại!");
+            loginEmail = querySnapshot.docs[0].data().email;
+        } catch (dbError) {
+            // Nếu lỗi DB (do chưa có collection users), báo lỗi rõ ràng
+            throw new Error("Không tìm thấy user (Lỗi DB hoặc chưa có tài khoản). Hãy thử đăng nhập bằng Email.");
+        }
       }
       await signInWithEmailAndPassword(auth, loginEmail, password);
       if (onLoginSuccess) onLoginSuccess();
@@ -84,27 +88,46 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
     }
   };
 
+  // Đăng ký
   const handleRegister = async (e) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
+    setError(''); setLoading(true);
     try {
       if (password !== confirmPass) throw new Error("Mật khẩu xác nhận không khớp!");
-      const q = query(collection(db, "users"), where("username", "==", username));
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) throw new Error("Tên tài khoản đã được sử dụng!");
+      
+      // 1. Kiểm tra trùng username (nếu DB đã có)
+      try {
+          const q = query(collection(db, "users"), where("username", "==", username));
+          const snapshot = await getDocs(q);
+          if (!snapshot.empty) throw new Error("Tên tài khoản đã được sử dụng!");
+      } catch (checkErr) {
+          // Nếu lỗi do permission hoặc chưa có collection, cứ cho qua để tạo Auth trước
+          console.warn("Bỏ qua check trùng username do lỗi DB:", checkErr);
+      }
 
+      // 2. Tạo tài khoản Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await setDoc(doc(db, "users", userCredential.user.uid), {
-        email: email,
-        username: username,
-        role: 'user',
-        createdAt: serverTimestamp()
-      });
+      
+      // 3. Cập nhật Profile Auth
       await updateProfile(userCredential.user, {
           displayName: username,
           photoURL: `https://ui-avatars.com/api/?name=${username}&background=random`
       });
+
+      // 4. Lưu vào Firestore (Quan trọng: Dùng setDoc để tạo document với ID là UID)
+      try {
+          await setDoc(doc(db, "users", userCredential.user.uid), {
+            email: email,
+            username: username,
+            role: 'user',
+            createdAt: serverTimestamp()
+          });
+      } catch (dbErr) {
+          console.error("Lỗi lưu Firestore:", dbErr);
+          // Không throw lỗi ở đây để user vẫn đăng nhập được, DB sửa sau
+          alert("Tài khoản đã tạo nhưng chưa lưu được thông tin phụ. Vui lòng liên hệ Admin nếu gặp lỗi hiển thị.");
+      }
+      
       if (onLoginSuccess) onLoginSuccess();
     } catch (err) {
       setError(err.message.replace("Firebase:", "").trim());
@@ -118,7 +141,7 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
     if (!email) return setError("Vui lòng nhập Email!");
     try {
         await sendPasswordResetEmail(auth, email);
-        setMsg(`Đã gửi LINK đổi mật khẩu tới ${email}. Vui lòng kiểm tra hộp thư (cả mục Spam).`);
+        setMsg(`Đã gửi LINK đổi mật khẩu tới ${email}. Vui lòng kiểm tra hộp thư.`);
     } catch (e) { setError(e.message); }
   };
 
@@ -173,7 +196,7 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
             <input 
               type="text" required 
               className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="Tên tài khoản"
+              placeholder="Tên tài khoản (Viết liền không dấu)"
               value={username} onChange={e => setUsername(e.target.value)}
             />
             <input 
@@ -304,7 +327,7 @@ function HistoryView({ db, user }) {
     );
 }
 
-// 3. ProfileView chuẩn (Có Re-auth)
+// 3. ProfileView
 function ProfileView({ user, userData, auth }) {
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
@@ -365,7 +388,7 @@ function ProfileView({ user, userData, auth }) {
   );
 }
 
-// 4. Panel Admin dành riêng cho Owner
+// 4. Panel Admin
 function OwnerAdminPanel({ db, user, setUserRoleByUid }) {
   const [qText, setQText] = useState("");
   const [found, setFound] = useState(null);
@@ -418,16 +441,21 @@ function OwnerAdminPanel({ db, user, setUserRoleByUid }) {
 export default function App() {
   const [user, setUser] = useState(null); 
   const [userData, setUserData] = useState(null);
-  
-  // States
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthScreen, setIsAuthScreen] = useState(true);
   const [view, setView] = useState('HOME'); 
   const [menuOpen, setMenuOpen] = useState(false);
   
-  // Mail States
-  const [currentAddress, setCurrentAddress] = useState(null);
-  const [apiKey, setApiKey] = useState(null);
+  // FIX F5: Khởi tạo state từ LocalStorage ngay lập tức (Lazy Init)
+  const [currentAddress, setCurrentAddress] = useState(() => {
+      const saved = localStorage.getItem('currentSession');
+      return saved ? JSON.parse(saved).address : null;
+  });
+  const [apiKey, setApiKey] = useState(() => {
+      const saved = localStorage.getItem('currentSession');
+      return saved ? JSON.parse(saved).apiKey : null;
+  });
+
   const [inbox, setInbox] = useState([]);
   const [restoreKey, setRestoreKey] = useState('');
   const [guestCount, setGuestCount] = useState(0);
@@ -459,14 +487,16 @@ export default function App() {
          } catch(e) { console.log(e); }
       }
 
+      // 3. Tìm qua API ngoài (Magic Link)
       if (!foundAddress) {
           try {
+              // Gọi API để tìm địa chỉ email dựa trên Key
               const res = await fetch(`https://mailao.vercel.app/api?key=${key}`);
               if (res.ok) {
                   const data = await res.json();
                   if (data.email) foundAddress = data.email;
               }
-          } catch(e) {}
+          } catch(e) { console.log("Không tìm thấy trên API ngoài"); }
       }
 
       if (foundAddress) {
@@ -484,11 +514,9 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const magicKey = params.get('inbox') || params.get('key');
-    const savedMail = JSON.parse(localStorage.getItem('currentSession'));
-    if (!magicKey && savedMail) {
-        setCurrentAddress(savedMail.address);
-        setApiKey(savedMail.apiKey);
-    }
+    
+    // Nếu có magic key, ưu tiên khôi phục ngay
+    if (magicKey) restoreFromKey(magicKey);
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
@@ -510,7 +538,6 @@ export default function App() {
         }
       }
       setAuthLoading(false);
-      if (magicKey) restoreFromKey(magicKey);
     });
     return () => unsubscribe();
   }, []);
@@ -565,7 +592,9 @@ export default function App() {
     };
 
     if (user) {
-        await addDoc(collection(db, "history"), historyData);
+        try {
+            await addDoc(collection(db, "history"), historyData);
+        } catch(e) { console.log("Lỗi lưu lịch sử:", e); }
     } else {
         const localHist = JSON.parse(localStorage.getItem('guestHistory') || '[]');
         localHist.unshift(historyData);
@@ -618,12 +647,9 @@ export default function App() {
                             <button onClick={() => { setView('HOME'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-50 text-gray-700 font-medium flex items-center gap-3 transition"><i className="ph ph-house text-lg text-blue-600"></i> Trang chủ</button>
                             <button onClick={() => { setView('PROFILE'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-50 text-gray-700 font-medium flex items-center gap-3 transition"><i className="ph ph-user-circle text-lg text-purple-600"></i> Thông tin cá nhân</button>
                             <button onClick={() => { setView('HISTORY'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-50 text-gray-700 font-medium flex items-center gap-3 transition"><i className="ph ph-clock-counter-clockwise text-lg text-orange-600"></i> Lịch sử</button>
-                            
-                            {/* MENU OWNER ADMIN */}
                             {user.uid === OWNER_UID && (
                                 <button onClick={() => { setView('OWNER_ADMIN'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-yellow-50 text-gray-800 font-medium flex items-center gap-3 transition border-t mt-1 pt-3"><i className="ph ph-shield-star text-lg text-yellow-600"></i> Quản trị (Owner)</button>
                             )}
-
                             <div className="border-t my-2 border-gray-100"></div>
                             <button onClick={handleLogout} className="w-full text-left px-4 py-3 rounded-lg hover:bg-red-50 text-red-600 font-medium flex items-center gap-3 transition"><i className="ph ph-sign-out text-lg"></i> Đăng xuất</button>
                         </nav>
