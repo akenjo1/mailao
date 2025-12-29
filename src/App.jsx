@@ -114,6 +114,12 @@ function inferService(from = "", subject = "") {
   return "-";
 }
 
+function formatMailTime(mail) {
+  const sec = mail?.timestamp?.seconds;
+  if (sec) return new Date(sec * 1000).toLocaleString();
+  return "Vừa xong";
+}
+
 function getMagicKeyFromUrl() {
   const u = new URL(window.location.href);
   const qp = u.searchParams.get("key") || u.searchParams.get("restore");
@@ -162,6 +168,11 @@ function cleanMailText(raw = "") {
   s = s.replace(/\n{4,}/g, "\n\n\n").trim();
 
   return s;
+}
+
+function makeMagicLink(apiKey) {
+  // ✅ Dùng query param để link hoạt động kể cả khi Vercel chưa cấu hình rewrite cho /API-xxx
+  return `${WEB_BASE}?restore=${encodeURIComponent(apiKey)}`;
 }
 
 // ==========================================
@@ -736,9 +747,9 @@ export default function App() {
   const [selectedMail, setSelectedMail] = useState(null);
   const [viewRaw, setViewRaw] = useState(false);
 
-  // ✅ NEW: inbox toolbar (search/sort/compact)
-  const [searchText, setSearchText] = useState("");
-  const [sortMode, setSortMode] = useState("newest"); // newest | oldest | from | subject
+  // ✅ NEW: sắp xếp + tìm kiếm + gọn
+  const [inboxSort, setInboxSort] = useState("newest"); // newest | oldest | from_az | from_za | subject_az | subject_za
+  const [inboxSearch, setInboxSearch] = useState("");
   const [compactMode, setCompactMode] = useState(false);
 
   const [isAuthScreen, setIsAuthScreen] = useState(() => {
@@ -783,30 +794,45 @@ export default function App() {
     return guestCount || 0;
   }, [user, userData, guestCount]);
 
-  // ✅ NEW: lọc + sort inbox cho dễ nhìn
+  // ✅ NEW: danh sách inbox đã filter + sort
   const inboxView = useMemo(() => {
-    const q = (searchText || "").trim().toLowerCase();
-    let arr = Array.isArray(inbox) ? [...inbox] : [];
+    const list = Array.isArray(inbox) ? [...inbox] : [];
+    const q = (inboxSearch || "").trim().toLowerCase();
 
-    if (q) {
-      arr = arr.filter((m) => {
-        const from = (m.from || "").toLowerCase();
-        const sub = (m.subject || "").toLowerCase();
-        const body = cleanMailText(m.body || "").toLowerCase();
-        return from.includes(q) || sub.includes(q) || body.includes(q);
-      });
-    }
+    const filtered = !q
+      ? list
+      : list.filter((m) => {
+          const from = (m.from || "").toLowerCase();
+          const subject = (m.subject || "").toLowerCase();
+          const body = cleanMailText(m.body || "").toLowerCase();
+          const to = (m.to || "").toLowerCase();
+          return from.includes(q) || subject.includes(q) || body.includes(q) || to.includes(q);
+        });
 
-    const timeMs = (m) => (m?.timestamp?.seconds ? m.timestamp.seconds * 1000 : 0);
-    arr.sort((a, b) => {
-      if (sortMode === "oldest") return timeMs(a) - timeMs(b);
-      if (sortMode === "from") return String(a.from || "").localeCompare(String(b.from || ""), "vi");
-      if (sortMode === "subject") return String(a.subject || "").localeCompare(String(b.subject || ""), "vi");
-      return timeMs(b) - timeMs(a);
+    const timeValue = (m) => (m?.timestamp?.seconds ? Number(m.timestamp.seconds) : 0);
+    const fromValue = (m) => (m?.from || "").toLowerCase();
+    const subjectValue = (m) => (m?.subject || "").toLowerCase();
+
+    filtered.sort((a, b) => {
+      switch (inboxSort) {
+        case "oldest":
+          return timeValue(a) - timeValue(b);
+        case "from_az":
+          return fromValue(a).localeCompare(fromValue(b)) || timeValue(b) - timeValue(a);
+        case "from_za":
+          return fromValue(b).localeCompare(fromValue(a)) || timeValue(b) - timeValue(a);
+        case "subject_az":
+          return subjectValue(a).localeCompare(subjectValue(b)) || timeValue(b) - timeValue(a);
+        case "subject_za":
+          return subjectValue(b).localeCompare(subjectValue(a)) || timeValue(b) - timeValue(a);
+        case "newest":
+        default:
+          return timeValue(b) - timeValue(a);
+      }
     });
 
-    return arr;
-  }, [inbox, searchText, sortMode]);
+    return filtered;
+  }, [inbox, inboxSearch, inboxSort]);
 
   // =========================
   // Admin function
@@ -850,11 +876,6 @@ export default function App() {
 
         localStorage.setItem("skipAuth", "1");
         setIsAuthScreen(false);
-        setView("HOME");
-        setSelectedMail(null);
-        setSearchText("");
-        setSortMode("newest");
-        setCompactMode(false);
 
         // xóa param URL
         window.history.replaceState({}, document.title, "/");
@@ -883,12 +904,6 @@ export default function App() {
       );
       localStorage.setItem("skipAuth", "1");
       setIsAuthScreen(false);
-      setView("HOME");
-      setSelectedMail(null);
-      setSearchText("");
-      setSortMode("newest");
-      setCompactMode(false);
-
       window.history.replaceState({}, document.title, "/");
       if (manual) alert(`Đã khôi phục thành công: ${localMatch.address}`);
       return;
@@ -1052,11 +1067,8 @@ export default function App() {
     setApiKey(key);
     setInbox([]);
     setSelectedMail(null);
-    setSearchText("");
-    setSortMode("newest");
-    setCompactMode(false);
 
-    const link = `${WEB_BASE}/${key}`;
+    const link = makeMagicLink(key);
 
     await setDoc(doc(db, "keys", key), {
       apiKey: key,
@@ -1106,9 +1118,6 @@ export default function App() {
     setView("HOME");
     setMenuOpen(false);
     setSelectedMail(null);
-    setSearchText("");
-    setSortMode("newest");
-    setCompactMode(false);
     setIsAuthScreen(false);
   };
 
@@ -1172,6 +1181,7 @@ export default function App() {
     const q = query(collection(db, "emails"), where("to", "==", currentAddress));
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const mails = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // mặc định newest (sắp xếp cuối cùng dùng inboxView)
       mails.sort((a, b) => {
         const tA = a.timestamp?.seconds || 0;
         const tB = b.timestamp?.seconds || 0;
@@ -1408,27 +1418,28 @@ export default function App() {
                 <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
               </button>
 
-              {/* ✅ RESTORE INPUT: luôn hiển thị */}
-              <div className="mt-4 pt-4 border-t flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Nhập API Key để khôi phục mail..."
-                  className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
-                  value={restoreKey}
-                  onChange={(e) => setRestoreKey(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => restoreFromKey(restoreKey, true)}
-                  className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200"
-                >
-                  Khôi phục
-                </button>
-              </div>
+              {!currentAddress && (
+                <div className="mt-4 pt-4 border-t flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Nhập API Key để khôi phục mail..."
+                    className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
+                    value={restoreKey}
+                    onChange={(e) => setRestoreKey(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => restoreFromKey(restoreKey, true)}
+                    className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200"
+                  >
+                    Khôi phục
+                  </button>
+                </div>
+              )}
 
               {!isVip && (
                 <div className="mt-3 text-xs text-gray-500">
-                  * Guest/User thường: giới hạn {DAILY_LIMIT} mail/ngày. Mail sẽ hết hạn sau 24h (nếu bạn bật TTL).
+                  * Guest/User thường: giới hạn {DAILY_LIMIT} mail/ngày. Mail sẽ hết hạn sau 24h (nếu bật TTL).
                 </div>
               )}
             </div>
@@ -1479,17 +1490,17 @@ export default function App() {
                       <p className="text-xs text-gray-400 font-bold uppercase mb-1">Magic Link (Truy cập nhanh)</p>
                       <div className="flex items-center justify-between">
                         <a
-                          href={`${WEB_BASE}/${apiKey}`}
+                          href={makeMagicLink(apiKey)}
                           target="_blank"
                           rel="noreferrer"
                           className="text-sm text-blue-500 underline truncate mr-2"
                         >
-                          {WEB_BASE}/{apiKey}
+                          {makeMagicLink(apiKey)}
                         </a>
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard.writeText(`${WEB_BASE}/${apiKey}`);
+                            navigator.clipboard.writeText(makeMagicLink(apiKey));
                             alert("Đã copy Link!");
                           }}
                           className="text-blue-500 hover:text-blue-700"
@@ -1502,69 +1513,73 @@ export default function App() {
                 </div>
 
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-100 min-h-[400px] flex flex-col">
-                  <div className="p-4 border-b flex items-center justify-between bg-gray-50 rounded-t-2xl">
-                    <h3 className="font-bold text-gray-700 flex items-center gap-2">
-                      <i className="ph ph-tray text-lg text-blue-600"></i> Hộp thư đến
-                    </h3>
+                  <div className="p-4 border-b bg-gray-50 rounded-t-2xl">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                        <i className="ph ph-tray text-lg text-blue-600"></i> Hộp thư đến
+                        <span className="text-xs font-semibold text-gray-400">({inboxView.length})</span>
+                      </h3>
 
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Real-time
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Real-time
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={refreshInbox}
+                          className={`p-2 hover:bg-gray-200 rounded-lg text-gray-500 transition ${
+                            refreshing ? "animate-spin text-blue-600" : ""
+                          }`}
+                          title="Làm mới"
+                        >
+                          <i className="ph ph-arrows-clockwise text-lg"></i>
+                        </button>
                       </div>
+                    </div>
 
-                      <button
-                        type="button"
-                        onClick={refreshInbox}
-                        className={`p-2 hover:bg-gray-200 rounded-lg text-gray-500 transition ${
-                          refreshing ? "animate-spin text-blue-600" : ""
-                        }`}
-                        title="Làm mới"
-                      >
-                        <i className="ph ph-arrows-clockwise text-lg"></i>
-                      </button>
+                    {/* ✅ NEW: Search + Sort + Compact */}
+                    <div className="mt-3 grid md:grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Tìm theo người gửi / tiêu đề / nội dung..."
+                        className="md:col-span-2 p-3 border rounded-lg bg-white outline-none focus:border-blue-500"
+                        value={inboxSearch}
+                        onChange={(e) => setInboxSearch(e.target.value)}
+                      />
+                      <div className="flex gap-2">
+                        <select
+                          className="flex-1 p-3 border rounded-lg bg-white outline-none focus:border-blue-500"
+                          value={inboxSort}
+                          onChange={(e) => setInboxSort(e.target.value)}
+                        >
+                          <option value="newest">Mới nhất</option>
+                          <option value="oldest">Cũ nhất</option>
+                          <option value="from_az">Người gửi A→Z</option>
+                          <option value="from_za">Người gửi Z→A</option>
+                          <option value="subject_az">Tiêu đề A→Z</option>
+                          <option value="subject_za">Tiêu đề Z→A</option>
+                        </select>
+
+                        <button
+                          type="button"
+                          onClick={() => setCompactMode((v) => !v)}
+                          className={`px-4 rounded-lg border font-medium ${
+                            compactMode ? "bg-gray-900 text-white border-gray-900" : "bg-white hover:bg-gray-100"
+                          }`}
+                          title="Chế độ gọn"
+                        >
+                          {compactMode ? "Gọn" : "Chi tiết"}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  {/* ✅ Toolbar Search + Sort + Compact */}
-                  <div className="p-4 border-b bg-white flex flex-col md:flex-row gap-2">
-                    <input
-                      value={searchText}
-                      onChange={(e) => setSearchText(e.target.value)}
-                      placeholder="Tìm theo From / Subject / Nội dung..."
-                      className="flex-1 p-3 border rounded-lg outline-none focus:border-blue-500"
-                    />
-
-                    <select
-                      value={sortMode}
-                      onChange={(e) => setSortMode(e.target.value)}
-                      className="p-3 border rounded-lg bg-white text-sm outline-none"
-                      title="Sắp xếp"
-                    >
-                      <option value="newest">Mới nhất</option>
-                      <option value="oldest">Cũ nhất</option>
-                      <option value="from">Theo From</option>
-                      <option value="subject">Theo Subject</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      onClick={() => setCompactMode(!compactMode)}
-                      className="p-3 border rounded-lg bg-white text-sm hover:bg-gray-50"
-                    >
-                      {compactMode ? "Gọn: ON" : "Gọn: OFF"}
-                    </button>
-                  </div>
-
                   <div className="flex-1">
-                    {inbox.length === 0 ? (
+                    {inboxView.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
                         <i className="ph ph-envelope-simple-open text-6xl mb-4"></i>
-                        <p className="font-medium">Chưa có thư nào</p>
-                      </div>
-                    ) : inboxView.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
-                        <i className="ph ph-magnifying-glass text-6xl mb-4"></i>
-                        <p className="font-medium">Không có kết quả phù hợp</p>
+                        <p className="font-medium">{inbox.length === 0 ? "Chưa có thư nào" : "Không tìm thấy kết quả"}</p>
                       </div>
                     ) : (
                       <ul className="divide-y divide-gray-50">
@@ -1577,25 +1592,37 @@ export default function App() {
                             }}
                             className="p-5 hover:bg-blue-50/50 cursor-pointer transition group"
                           >
+                            {/* Người gửi + Ngày giờ */}
                             <div className="flex justify-between items-start mb-2">
-                              <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs shrink-0">
                                   {(mail.from || "?").charAt(0).toUpperCase()}
                                 </div>
-                                <span className="font-bold text-gray-800">{mail.from || "Unknown"}</span>
+                                <span className="font-bold text-gray-800 truncate">{mail.from || "Unknown"}</span>
                               </div>
-                              <span className="text-xs text-gray-400 group-hover:text-blue-500 whitespace-nowrap ml-2">
-                                {mail.timestamp?.seconds
-                                  ? new Date(mail.timestamp.seconds * 1000).toLocaleString()
-                                  : "Vừa xong"}
+
+                              <span className="text-xs text-gray-400 group-hover:text-blue-500 whitespace-nowrap ml-3">
+                                {formatMailTime(mail)}
                               </span>
                             </div>
 
-                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10">{mail.subject || "(No subject)"}</p>
+                            {/* Tiêu đề */}
+                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10 line-clamp-1">
+                              {mail.subject || "(No subject)"}
+                            </p>
 
-                            {!compactMode && (
-                              <p className="text-sm text-gray-500 line-clamp-2 pl-10">{cleanMailText(mail.body || "")}</p>
-                            )}
+                            {/* Thông tin mail (to + preview body) */}
+                            <div className="pl-10">
+                              <div className="text-[11px] text-gray-400 mb-1">
+                                <span className="font-semibold text-gray-500">To:</span> {mail.to || currentAddress}
+                              </div>
+
+                              {!compactMode && (
+                                <p className="text-sm text-gray-500 line-clamp-2">
+                                  {cleanMailText(mail.body || "")}
+                                </p>
+                              )}
+                            </div>
                           </li>
                         ))}
                       </ul>
@@ -1616,11 +1643,7 @@ export default function App() {
                               <span className="font-semibold">From:</span> {selectedMail.from || "Unknown"} ·{" "}
                               <span className="font-semibold">To:</span> {selectedMail.to || currentAddress}
                             </div>
-                            <div className="text-xs text-gray-400 mt-1">
-                              {selectedMail.timestamp?.seconds
-                                ? new Date(selectedMail.timestamp.seconds * 1000).toLocaleString()
-                                : "Vừa xong"}
-                            </div>
+                            <div className="text-xs text-gray-400 mt-1">{formatMailTime(selectedMail)}</div>
                           </div>
 
                           <div className="flex items-center gap-2">
