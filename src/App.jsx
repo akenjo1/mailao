@@ -27,11 +27,10 @@ import {
 // --- CẤU HÌNH FIREBASE ---
 // ĐÃ CẬP NHẬT PROJECT ID: my-temp-mail-de60c
 const firebaseConfig = {
-  // QUAN TRỌNG: Bạn phải lấy API Key thật trong Project Settings trên Firebase Console
-  apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60", 
+  apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60",
   authDomain: "my-temp-mail-de60c.firebaseapp.com",
   projectId: "my-temp-mail-de60c",
-  storageBucket: "my-temp-mail-de60c.firebasestorage.app", 
+  storageBucket: "my-temp-mail-de60c.firebasestorage.app",
   messagingSenderId: "466454763740",
   appId: "1:466454763740:web:b7a9563589be2f732bbc19"
 };
@@ -166,10 +165,19 @@ function HistoryView({ db, user }) {
             return;
         }
 
-        // Lấy từ Firestore cho User
-        const q = query(collection(db, "history"), where("uid", "==", user.uid), orderBy("createdAt", "desc"));
+        // --- SỬA LỖI INDEX ---
+        // Thay vì dùng orderBy trong query (cần tạo index), ta lấy về hết rồi sort ở client
+        const q = query(collection(db, "history"), where("uid", "==", user.uid));
+        
         const unsub = onSnapshot(q, (snap) => {
-            setHistory(snap.docs.map(d => d.data()));
+            const data = snap.docs.map(d => d.data());
+            // Sắp xếp bằng JS: Mới nhất lên đầu
+            data.sort((a, b) => {
+                const tA = a.createdAt?.seconds || 0;
+                const tB = b.createdAt?.seconds || 0;
+                return tB - tA;
+            });
+            setHistory(data);
         }, (error) => {
             console.error("Lỗi đọc lịch sử:", error);
         });
@@ -274,23 +282,27 @@ export default function App() {
   useEffect(() => {
     if (!currentAddress) return;
     
-    // Nếu là Guest, ta chỉ giả lập hoặc dùng API (đây là demo real-time với Firestore)
-    // Lưu ý: Nếu có lỗi "The query requires an index", mở Console trình duyệt để lấy link tạo index
+    // --- SỬA LỖI INDEX ---
+    // Loại bỏ orderBy("timestamp", "desc") trong query để tránh lỗi "Requires Index"
     const q = query(
         collection(db, "emails"), 
-        where("to", "==", currentAddress), 
-        orderBy("timestamp", "desc")
+        where("to", "==", currentAddress)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const mails = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Sắp xếp Client-side (Mới nhất lên đầu)
+        mails.sort((a, b) => {
+            // Timestamp có thể là Firestore Timestamp object hoặc ISO string tùy lúc lưu
+            const tA = a.timestamp?.seconds || (new Date(a.timestamp?.timestampValue || 0).getTime()/1000) || 0;
+            const tB = b.timestamp?.seconds || (new Date(b.timestamp?.timestampValue || 0).getTime()/1000) || 0;
+            return tB - tA; 
+        });
+
         setInbox(mails);
     }, (error) => {
-        console.error("Lỗi đọc Inbox (Có thể do thiếu Index hoặc Permission):", error);
-        // Nếu lỗi do thiếu index, ta thử query đơn giản hơn để không bị trắng trang
-        if (error.code === 'failed-precondition') {
-            alert("Lỗi: Thiếu Index trong Firestore. Hãy mở Console (F12) để lấy link tạo Index.");
-        }
+        console.error("Lỗi đọc Inbox:", error);
     });
 
     return () => unsubscribe();
