@@ -1,80 +1,75 @@
 import admin from "firebase-admin";
 
-function mustEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
-
-function initAdmin() {
-  if (admin.apps.length) return;
-
-  // Cách dễ nhất: lưu JSON service account vào env FIREBASE_SERVICE_ACCOUNT
-  // Vercel: Settings -> Environment Variables -> FIREBASE_SERVICE_ACCOUNT
-  const saRaw = mustEnv("FIREBASE_SERVICE_ACCOUNT");
-  const serviceAccount = JSON.parse(saRaw);
-
+function getAdmin() {
+  if (admin.apps.length) return admin;
+  const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "{}");
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert(sa),
   });
+  return admin;
 }
 
-function stripHtml(html = "") {
-  return String(html || "")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function makePreview({ text, html }) {
-  const base = (text && text.trim()) ? text.trim() : stripHtml(html || "");
-  return base.slice(0, 220);
+async function readJson(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const raw = Buffer.concat(chunks).toString("utf-8");
+  return raw ? JSON.parse(raw) : {};
 }
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "METHOD_NOT_ALLOWED" });
+    if (req.method === "GET") {
+      return res.status(200).json({ ok: true, endpoint: "ingest-mail" });
+    }
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
     const secret = req.headers["x-ingest-secret"];
-    if (!secret || secret !== mustEnv("INGEST_SECRET")) {
-      return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+    if (!process.env.INGEST_SECRET || secret !== process.env.INGEST_SECRET) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
-    initAdmin();
-    const db = admin.firestore();
+    const payload = await readJson(req);
 
-    const {
+    const to = String(payload.to || "").toLowerCase().trim();
+    if (!to) return res.status(400).json({ ok: false, error: "Missing to" });
+
+    const fromEmail = String(payload.from || "").trim();
+    const fromName = String(payload.fromName || "").trim();
+    const subject = String(payload.subject || "(No subject)").trim();
+    const dateHeader = String(payload.dateHeader || "").trim();
+    const receivedAt = String(payload.receivedAt || new Date().toISOString());
+
+    // Ưu tiên html để render giống CapCut; fallback text
+    const html = String(payload.html || "");
+    const text = String(payload.text || "");
+    const raw = String(payload.raw || "");
+
+    // FE hiện tại đang đọc mail.body + mail.timestamp => giữ tương thích
+    const body = html || text || raw;
+
+    const a = getAdmin();
+    const db = a.firestore();
+
+    // TTL mặc định 24h (bạn có thể đổi)
+    const expiresAt = a.firestore.Timestamp.fromDate(new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+    const docData = {
       to,
-      fromEmail,
+      from: fromEmail,
       fromName,
       subject,
       dateHeader,
-      receivedAt,
+      receivedAt, // ISO
       html,
       text,
-      raw,
-    } = req.body || {};
-
-    if (!to) return res.status(400).json({ ok: false, error: "MISSING_TO" });
-
-    const docData = {
-      to: String(to).toLowerCase().trim(),
-      fromEmail: String(fromEmail || "").trim(),
-      fromName: String(fromName || "").trim(),
-      subject: String(subject || "(No subject)").trim(),
-      dateHeader: String(dateHeader || "").trim(),
-      receivedAt: String(receivedAt || new Date().toISOString()),
-      html: String(html || ""),
-      text: String(text || ""),
-      raw: String(raw || ""),
-      preview: makePreview({ text, html }),
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      body,
+      // để FE sort/hiển thị như cũ
+      timestamp: a.firestore.FieldValue.serverTimestamp(),
+      expiresAt,
     };
 
     const ref = await db.collection("emails").add(docData);
-
     return res.status(200).json({ ok: true, id: ref.id });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
