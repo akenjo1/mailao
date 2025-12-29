@@ -426,11 +426,64 @@ export default function App() {
   // Guest System
   const [guestCount, setGuestCount] = useState(0);
 
+  // === XỬ LÝ KHÔI PHỤC MAIL (MAGIC LINK & API) ===
+  const restoreFromKey = async (key, manual = false) => {
+      if (!key) return;
+      let foundAddress = null;
+      let foundKey = key;
+
+      // 1. Tìm trong LocalStorage (Guest)
+      const localHist = JSON.parse(localStorage.getItem('guestHistory') || '[]');
+      const localMatch = localHist.find(h => h.apiKey === key);
+      if (localMatch) foundAddress = localMatch.address;
+
+      // 2. Tìm trong Firestore (User - nếu đã đăng nhập)
+      if (!foundAddress && user) {
+         try {
+             const q = query(collection(db, "history"), where("uid", "==", user.uid));
+             const snap = await getDocs(q);
+             const list = snap.docs.map(d => d.data());
+             const fireMatch = list.find(h => h.apiKey === key);
+             if (fireMatch) foundAddress = fireMatch.address;
+         } catch(e) { console.log("Lỗi tìm Firestore:", e); }
+      }
+
+      // 3. Tìm qua API ngoài (Magic Link Integration - mailao.vercel.app)
+      if (!foundAddress) {
+          try {
+              // Gọi API để tìm địa chỉ email dựa trên Key (Mô phỏng magiclink)
+              const res = await fetch(`https://mailao.vercel.app/api?key=${key}`);
+              if (res.ok) {
+                  const data = await res.json();
+                  if (data.email) foundAddress = data.email;
+              }
+          } catch(e) { 
+              console.log("Không tìm thấy trên API ngoài");
+          }
+      }
+
+      // KẾT QUẢ
+      if (foundAddress) {
+          setCurrentAddress(foundAddress);
+          setApiKey(foundKey);
+          localStorage.setItem('currentSession', JSON.stringify({ address: foundAddress, apiKey: foundKey }));
+          // Xóa param trên URL cho gọn
+          window.history.replaceState({}, document.title, "/");
+          if(manual) alert(`Đã khôi phục thành công: ${foundAddress}`);
+      } else {
+          if(manual) alert("Không tìm thấy thông tin mail này trong hệ thống!");
+      }
+  };
+
   // 1. Kiểm tra trạng thái đăng nhập & Khôi phục phiên làm việc
   useEffect(() => {
-    // Load session mail
+    // 1.1. Check URL Magic Link (?inbox=KEY hoặc ?key=KEY)
+    const params = new URLSearchParams(window.location.search);
+    const magicKey = params.get('inbox') || params.get('key');
+    
+    // 1.2. Load session cũ nếu không có magic link
     const savedMail = JSON.parse(localStorage.getItem('currentSession'));
-    if (savedMail) {
+    if (!magicKey && savedMail) {
         setCurrentAddress(savedMail.address);
         setApiKey(savedMail.apiKey);
     }
@@ -440,13 +493,19 @@ export default function App() {
         setUser(currentUser);
         setIsAuthScreen(false);
         const userRef = doc(db, "users", currentUser.uid);
-        const snap = await getDoc(userRef);
-        if (snap.exists()) {
-          setUserData(snap.data());
-        } else {
-            // Fallback nếu user chưa có data
-            setUserData({ username: currentUser.email.split('@')[0], role: 'user' });
-        }
+        const snap = await getDocs(query(collection(db, "users"), where("email", "==", currentUser.email))); 
+        // Fallback query if direct doc read fails due to ID mismatch or just use Auth data
+        // Ở đây ta đơn giản hóa:
+        setUserData({ 
+            username: currentUser.displayName || currentUser.email.split('@')[0], 
+            role: 'user' // Mặc định, sẽ update nếu fetch được từ DB
+        });
+        
+        // Fetch role thật từ DB
+        getDoc(doc(db, "users", currentUser.uid)).then(s => {
+            if(s.exists()) setUserData(s.data());
+        });
+
       } else {
         setUser(null);
         setUserData(null);
@@ -461,6 +520,11 @@ export default function App() {
         }
       }
       setAuthLoading(false);
+      
+      // 1.3. Kích hoạt Magic Link sau khi Auth đã check xong (để nếu user login thì tìm được trong firestore)
+      if (magicKey) {
+          restoreFromKey(magicKey);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -532,33 +596,6 @@ export default function App() {
         localHist.unshift(historyData);
         localStorage.setItem('guestHistory', JSON.stringify(localHist));
     }
-  };
-
-  const handleRestore = async () => {
-      if (!restoreKey) return alert("Vui lòng nhập API Key!");
-      
-      // Tìm trong history của user hoặc guest
-      let found = null;
-      
-      if (user) {
-         // Query firestore (Cần index nếu query where apiKey, ở đây ta query hết history user rồi filter client cho nhanh đỡ lỗi index)
-         const q = query(collection(db, "history"), where("uid", "==", user.uid));
-         const snap = await getDocs(q);
-         const list = snap.docs.map(d => d.data());
-         found = list.find(h => h.apiKey === restoreKey);
-      } else {
-         const localHist = JSON.parse(localStorage.getItem('guestHistory') || '[]');
-         found = localHist.find(h => h.apiKey === restoreKey);
-      }
-
-      if (found) {
-          setCurrentAddress(found.address);
-          setApiKey(found.apiKey);
-          localStorage.setItem('currentSession', JSON.stringify({ address: found.address, apiKey: found.apiKey }));
-          alert(`Đã khôi phục mail: ${found.address}`);
-      } else {
-          alert("Không tìm thấy API Key này trong lịch sử của bạn!");
-      }
   };
 
   const handleLogout = async () => {
@@ -710,7 +747,7 @@ export default function App() {
                                 value={restoreKey}
                                 onChange={e=>setRestoreKey(e.target.value)}
                             />
-                            <button onClick={handleRestore} className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200">
+                            <button onClick={() => restoreFromKey(restoreKey, true)} className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200">
                                 Khôi phục
                             </button>
                         </div>
