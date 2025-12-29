@@ -44,10 +44,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 // === CẤU HÌNH DOMAIN ===
-// Domain mail để tạo địa chỉ email
 const EMAIL_DOMAIN = "adbv.io.vn";
-
-// Domain web cố định để tạo MagicLink (ví dụ bạn yêu cầu: mailao.vercel.app)
 const WEB_BASE = "https://mailao.vercel.app";
 
 // --- OWNER UID (Người duy nhất có quyền set Admin) ---
@@ -133,10 +130,36 @@ function pruneGuestHistory() {
   const now = Date.now();
   const kept = raw.filter((h) => {
     const exp = h?.expiresAtMs;
-    if (!exp) return true; // nếu bản cũ chưa có expiresAtMs thì giữ (hoặc bạn có thể xóa)
+    if (!exp) return true;
     return now <= exp;
   });
   if (kept.length !== raw.length) localStorage.setItem("guestHistory", JSON.stringify(kept));
+}
+
+/** ✅ NEW: tách body sạch từ raw email */
+function extractBodyFromRaw(raw = "") {
+  if (!raw) return "";
+  const idx = raw.indexOf("\n\n");
+  return idx >= 0 ? raw.slice(idx + 2) : raw;
+}
+
+/** ✅ NEW: làm gọn nội dung để preview/hiển thị */
+function cleanMailText(raw = "") {
+  let s = extractBodyFromRaw(raw);
+
+  // bỏ base64/attachment dài
+  s = s.replace(/^[A-Za-z0-9+/=]{80,}$/gm, "[...binary/attachment removed...]");
+
+  // bỏ các header hay gặp (nếu còn dính)
+  s = s.replace(
+    /^(Received|ARC-|Authentication-Results|DKIM-Signature|Return-Path|X-[A-Za-z0-9-]+|Message-ID|MIME-Version|Content-Type|Content-Transfer-Encoding|Delivered-To|To|From|Subject|Date):.*$/gim,
+    ""
+  );
+
+  // gom dòng trống
+  s = s.replace(/\n{4,}/g, "\n\n\n").trim();
+
+  return s;
 }
 
 // ==========================================
@@ -161,7 +184,6 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
     try {
       let loginEmail = inputLogin.trim();
       if (!loginEmail.includes("@")) {
-        // Login bằng Username => tìm email trong users
         const q = query(collection(db, "users"), where("username", "==", loginEmail));
         const querySnapshot = await getDocs(q);
         if (querySnapshot.empty) throw new Error("Tên tài khoản không tồn tại!");
@@ -186,7 +208,6 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
       const u = normalizeLocalPart(username);
       if (!u || !isValidLocalPart(u)) throw new Error("Tên tài khoản chỉ gồm a-z 0-9 . _ - (tối đa 32 ký tự)");
 
-      // Check trùng username
       const qU = query(collection(db, "users"), where("username", "==", u));
       const snapU = await getDocs(qU);
       if (!snapU.empty) throw new Error("Tên tài khoản đã được sử dụng!");
@@ -217,7 +238,6 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
     e.preventDefault();
     if (!email) return setError("Vui lòng nhập Email!");
     try {
-      // Firebase Auth mặc định là gửi LINK reset (không phải mã code)
       await sendPasswordResetEmail(auth, email.trim());
       setMsg(`Đã gửi LINK đổi mật khẩu tới ${email}. Vui lòng kiểm tra hộp thư.`);
       setError("");
@@ -596,8 +616,7 @@ function ProfileView({ user, userData, auth }) {
           </div>
 
           <div className="text-[11px] text-gray-500 leading-relaxed">
-            * Firebase Auth mặc định gửi <b>LINK</b> reset. Nếu bạn muốn <b>mã code</b>, cần backend gửi email (mình để mẫu
-            Worker ở cuối).
+            * Firebase Auth mặc định gửi <b>LINK</b> reset. Nếu bạn muốn <b>mã code</b>, cần backend gửi email.
           </div>
         </div>
       </div>
@@ -713,14 +732,16 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // isAuthScreen: mặc định chỉ hiện login lần đầu, nếu user đã Skip thì lưu skipAuth=1
+  // ✅ NEW: chọn mail để xem chi tiết + toggle raw
+  const [selectedMail, setSelectedMail] = useState(null);
+  const [viewRaw, setViewRaw] = useState(false);
+
   const [isAuthScreen, setIsAuthScreen] = useState(() => {
     const skipped = localStorage.getItem("skipAuth") === "1";
     const hasSession = !!localStorage.getItem("currentSession");
     return !skipped && !hasSession;
   });
 
-  // Mail session (Lazy init)
   const [currentAddress, setCurrentAddress] = useState(() => {
     try {
       const s = localStorage.getItem("currentSession");
@@ -757,22 +778,15 @@ export default function App() {
     return guestCount || 0;
   }, [user, userData, guestCount]);
 
-  // =========================
-  // Admin function
-  // =========================
   const setUserRoleByUid = async (targetUid, role) => {
     if (!user || user.uid !== OWNER_UID) throw new Error("Không có quyền OWNER");
     await updateDoc(doc(db, "users", targetUid), { role });
   };
 
-  // =========================
-  // Restore từ API Key (Magic Link)
-  // =========================
   const restoreFromKey = async (key, manual = false) => {
     const k = (key || "").trim();
     if (!k) return;
 
-    // 1) ưu tiên lookup trên Firestore keys (public)
     try {
       const snap = await getDoc(doc(db, "keys", k));
       if (snap.exists()) {
@@ -800,18 +814,13 @@ export default function App() {
 
         localStorage.setItem("skipAuth", "1");
         setIsAuthScreen(false);
-
-        // xóa param URL
         window.history.replaceState({}, document.title, "/");
 
         if (manual) alert(`Đã khôi phục thành công: ${address}`);
         return;
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
 
-    // 2) fallback: guestHistory local
     const localHist = JSON.parse(localStorage.getItem("guestHistory") || "[]");
     const localMatch = localHist.find((h) => h.apiKey === k);
     if (localMatch?.address) {
@@ -836,22 +845,15 @@ export default function App() {
     if (manual) alert("Không tìm thấy API Key này!");
   };
 
-  // =========================
-  // Refresh inbox (không reload trang)
-  // =========================
   const refreshInbox = (e) => {
     e?.preventDefault?.();
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 800);
   };
 
-  // =========================
-  // Limit check (Guest + User thường)
-  // =========================
   const checkLimitAndBump = async () => {
     if (isVip) return true;
 
-    // Guest
     if (!user) {
       const today = todayKey();
       const local = JSON.parse(localStorage.getItem("guestLimit") || "{}");
@@ -869,7 +871,6 @@ export default function App() {
       return true;
     }
 
-    // User thường: bump dailyUsage bằng transaction (tránh bấm nhanh lỗi)
     try {
       const today = todayKey();
       const userRef = doc(db, "users", user.uid);
@@ -887,7 +888,6 @@ export default function App() {
         return next;
       });
 
-      // cập nhật UI local
       setUserData((prev) => ({
         ...(prev || {}),
         dailyUsage: { date: todayKey(), count: newCount },
@@ -900,9 +900,6 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Reserve email (đảm bảo không trùng)
-  // =========================
   const reserveAddress = async (addressLower) => {
     const ref = doc(db, "reserved_addresses", addressLower);
     try {
@@ -921,14 +918,10 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Create mail
-  // =========================
   const handleCreateMail = async (custom = null) => {
     const ok = await checkLimitAndBump();
     if (!ok) return;
 
-    // 1) tạo localPart
     let localPart = "";
     if (custom) {
       localPart = normalizeLocalPart(custom);
@@ -938,7 +931,6 @@ export default function App() {
       }
     }
 
-    // 2) reserve không trùng
     let address = "";
     if (localPart) {
       address = `${localPart}@${EMAIL_DOMAIN}`.toLowerCase();
@@ -948,7 +940,6 @@ export default function App() {
         return;
       }
     } else {
-      // random: thử nhiều lần
       let tries = 0;
       while (tries < 25) {
         const candidate = `${makeRandomLocalPart(10)}@${EMAIL_DOMAIN}`.toLowerCase();
@@ -965,7 +956,6 @@ export default function App() {
       }
     }
 
-    // 3) tạo apiKey không trùng (check keys doc)
     let key = "";
     for (let i = 0; i < 15; i++) {
       const k = makeApiKey();
@@ -980,10 +970,8 @@ export default function App() {
       return;
     }
 
-    // 4) TTL (user thường + guest hết hạn 24h; admin/owner không set expiresAt)
     const expiresAt = isVip ? null : Timestamp.fromMillis(Date.now() + ONE_DAY_MS);
 
-    // 5) Lưu session
     const session = {
       address,
       apiKey: key,
@@ -997,10 +985,10 @@ export default function App() {
     setCurrentAddress(address);
     setApiKey(key);
     setInbox([]);
+    setSelectedMail(null);
 
     const link = `${WEB_BASE}/${key}`;
 
-    // 6) Save keys mapping (public) để magiclink restore không cần login
     await setDoc(doc(db, "keys", key), {
       apiKey: key,
       address,
@@ -1009,7 +997,6 @@ export default function App() {
       ...(expiresAt ? { expiresAt } : {}),
     });
 
-    // 7) history (chỉ user đăng nhập)
     const historyData = {
       address,
       apiKey: key,
@@ -1023,7 +1010,6 @@ export default function App() {
     if (user) {
       await setDoc(doc(db, "history", key), historyData);
     } else {
-      // guest local
       pruneGuestHistory();
       const localHist = JSON.parse(localStorage.getItem("guestHistory") || "[]");
       localHist.unshift({
@@ -1040,9 +1026,6 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Logout
-  // =========================
   const handleLogout = async () => {
     await signOut(auth);
     localStorage.removeItem("currentSession");
@@ -1050,18 +1033,13 @@ export default function App() {
     setApiKey(null);
     setView("HOME");
     setMenuOpen(false);
-
-    // không ép quay về login nữa: nếu user muốn login lại thì bấm menu/login
+    setSelectedMail(null);
     setIsAuthScreen(false);
   };
 
-  // =========================
-  // INIT
-  // =========================
   useEffect(() => {
     pruneGuestHistory();
 
-    // Check magic link
     const magicKey = getMagicKeyFromUrl();
     if (magicKey) restoreFromKey(magicKey);
 
@@ -1081,13 +1059,11 @@ export default function App() {
           });
         }
 
-        // nếu đã login thì luôn vào app, không hiện màn auth
         setIsAuthScreen(false);
       } else {
         setUser(null);
         setUserData(null);
 
-        // guest count
         const today = todayKey();
         const local = JSON.parse(localStorage.getItem("guestLimit") || "{}");
         if (local.date === today) setGuestCount(Number(local.count || 0));
@@ -1096,7 +1072,6 @@ export default function App() {
           setGuestCount(0);
         }
 
-        // nếu user chưa skipAuth và không có session => có thể hiện auth
         const skipped = localStorage.getItem("skipAuth") === "1";
         const hasSession = !!localStorage.getItem("currentSession");
         setIsAuthScreen(!skipped && !hasSession);
@@ -1109,9 +1084,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // =========================
-  // Listen inbox + auto update "service" to history
-  // =========================
   useEffect(() => {
     if (!currentAddress) return;
 
@@ -1125,11 +1097,9 @@ export default function App() {
       });
       setInbox(mails);
 
-      // cập nhật dịch vụ theo mail mới nhất (nếu có)
       if (apiKey && mails.length > 0) {
         const s = inferService(mails[0]?.from || "", mails[0]?.subject || "");
         if (s && s !== "-") {
-          // user: update history doc
           if (user) {
             try {
               const hRef = doc(db, "history", apiKey);
@@ -1140,7 +1110,6 @@ export default function App() {
               }
             } catch {}
           } else {
-            // guest: update local history
             const localHist = JSON.parse(localStorage.getItem("guestHistory") || "[]");
             const idx = localHist.findIndex((h) => h.apiKey === apiKey);
             if (idx >= 0 && (!localHist[idx].service || localHist[idx].service === "-")) {
@@ -1357,7 +1326,6 @@ export default function App() {
                 <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
               </button>
 
-              {/* RESTORE INPUT luôn hiển thị khi chưa có mail */}
               {!currentAddress && (
                 <div className="mt-4 pt-4 border-t flex gap-2">
                   <input
@@ -1429,7 +1397,12 @@ export default function App() {
                     <div className="bg-white/80 p-3 rounded-lg border border-blue-100 backdrop-blur-sm">
                       <p className="text-xs text-gray-400 font-bold uppercase mb-1">Magic Link (Truy cập nhanh)</p>
                       <div className="flex items-center justify-between">
-                        <a href={`${WEB_BASE}/${apiKey}`} target="_blank" rel="noreferrer" className="text-sm text-blue-500 underline truncate mr-2">
+                        <a
+                          href={`${WEB_BASE}/${apiKey}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-blue-500 underline truncate mr-2"
+                        >
                           {WEB_BASE}/{apiKey}
                         </a>
                         <button
@@ -1480,7 +1453,14 @@ export default function App() {
                     ) : (
                       <ul className="divide-y divide-gray-50">
                         {inbox.map((mail) => (
-                          <li key={mail.id} className="p-5 hover:bg-blue-50/50 cursor-pointer transition group">
+                          <li
+                            key={mail.id}
+                            onClick={() => {
+                              setSelectedMail(mail);
+                              setViewRaw(false);
+                            }}
+                            className="p-5 hover:bg-blue-50/50 cursor-pointer transition group"
+                          >
                             <div className="flex justify-between items-start mb-2">
                               <div className="flex items-center gap-2">
                                 <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
@@ -1489,17 +1469,78 @@ export default function App() {
                                 <span className="font-bold text-gray-800">{mail.from || "Unknown"}</span>
                               </div>
                               <span className="text-xs text-gray-400 group-hover:text-blue-500 whitespace-nowrap ml-2">
-                                {mail.timestamp?.seconds ? new Date(mail.timestamp.seconds * 1000).toLocaleString() : "Vừa xong"}
+                                {mail.timestamp?.seconds
+                                  ? new Date(mail.timestamp.seconds * 1000).toLocaleString()
+                                  : "Vừa xong"}
                               </span>
                             </div>
-                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10">{mail.subject || "(No subject)"}</p>
-                            <p className="text-sm text-gray-500 line-clamp-2 pl-10">{mail.body || ""}</p>
+                            <p className="font-bold text-sm text-gray-700 mb-1 pl-10">
+                              {mail.subject || "(No subject)"}
+                            </p>
+
+                            {/* ✅ NEW: preview đã lọc */}
+                            <p className="text-sm text-gray-500 line-clamp-2 pl-10">
+                              {cleanMailText(mail.body || "")}
+                            </p>
                           </li>
                         ))}
                       </ul>
                     )}
                   </div>
                 </div>
+
+                {/* ✅ NEW: Modal xem mail */}
+                {selectedMail && (
+                  <>
+                    <div className="fixed inset-0 bg-black/40 z-[60]" onClick={() => setSelectedMail(null)} />
+                    <div className="fixed inset-0 z-[61] flex items-center justify-center p-4">
+                      <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden border">
+                        <div className="p-4 border-b flex items-start justify-between gap-3 bg-gray-50">
+                          <div className="min-w-0">
+                            <div className="font-bold text-gray-800 break-words">
+                              {selectedMail.subject || "(No subject)"}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              <span className="font-semibold">From:</span> {selectedMail.from || "Unknown"} ·{" "}
+                              <span className="font-semibold">To:</span> {selectedMail.to || currentAddress}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-1">
+                              {selectedMail.timestamp?.seconds
+                                ? new Date(selectedMail.timestamp.seconds * 1000).toLocaleString()
+                                : "Vừa xong"}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewRaw(!viewRaw)}
+                              className="px-3 py-2 text-xs rounded-lg border bg-white hover:bg-gray-100"
+                            >
+                              {viewRaw ? "Xem đã lọc" : "Xem raw"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMail(null)}
+                              className="p-2 rounded-lg hover:bg-gray-200"
+                              title="Đóng"
+                            >
+                              <i className="ph ph-x text-xl"></i>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="p-4 max-h-[70vh] overflow-auto">
+                          <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
+                            {viewRaw
+                              ? (selectedMail.body || "")
+                              : cleanMailText(selectedMail.body || "")}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
