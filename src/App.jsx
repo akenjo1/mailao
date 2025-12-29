@@ -7,7 +7,8 @@ import {
   signOut, 
   onAuthStateChanged,
   sendPasswordResetEmail,
-  updateProfile
+  updateProfile,
+  updatePassword
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -25,7 +26,6 @@ import {
 } from "firebase/firestore";
 
 // --- CẤU HÌNH FIREBASE ---
-// ĐÃ CẬP NHẬT PROJECT ID: my-temp-mail-de60c
 const firebaseConfig = {
   apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60",
   authDomain: "my-temp-mail-de60c.firebaseapp.com",
@@ -39,7 +39,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const DOMAIN = "adbv.io.vn"; // Tên miền của bạn
+const DOMAIN = "adbv.io.vn"; 
 
 // --- CÁC COMPONENT CON ---
 
@@ -50,22 +50,20 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
   const [password, setPassword] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [error, setError] = useState('');
+  const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
+    setError(''); setMsg('');
     setLoading(true);
 
     try {
       if (isLogin) {
-        // Xử lý đăng nhập
         await signInWithEmailAndPassword(auth, email, password);
       } else {
-        // Xử lý đăng ký
         if (password !== confirmPass) throw new Error("Mật khẩu xác nhận không khớp!");
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        // Tạo avatar mặc định theo tên
         await updateProfile(userCredential.user, {
             displayName: email.split('@')[0],
             photoURL: `https://ui-avatars.com/api/?name=${email}&background=random`
@@ -80,15 +78,15 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
   };
 
   const handleResetPass = async () => {
-    if (!email) return setError("Vui lòng nhập Email trước để khôi phục!");
+    if (!email) return setError("Vui lòng nhập Email vào ô bên trên để nhận mã/link đổi mật khẩu!");
     try {
         await sendPasswordResetEmail(auth, email);
-        alert("Đã gửi link đổi mật khẩu vào email của bạn!");
+        setMsg(`Đã gửi hướng dẫn đổi mật khẩu tới ${email}. Vui lòng kiểm tra hộp thư (cả mục Spam).`);
     } catch (e) { setError(e.message); }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 p-4 font-sans">
       <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md fade-in">
         <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-gray-800">ADBV Mail</h1>
@@ -96,6 +94,7 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
         </div>
 
         {error && <div className="bg-red-100 text-red-600 p-3 rounded mb-4 text-sm font-medium">{error}</div>}
+        {msg && <div className="bg-green-100 text-green-600 p-3 rounded mb-4 text-sm font-medium">{msg}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -136,10 +135,10 @@ function AuthScreen({ onLoginSuccess, onSkip }) {
         </form>
 
         <div className="mt-4 flex justify-between text-sm">
-          <button onClick={() => setIsLogin(!isLogin)} className="text-blue-600 hover:underline font-medium">
+          <button type="button" onClick={() => { setIsLogin(!isLogin); setError(''); setMsg(''); }} className="text-blue-600 hover:underline font-medium">
             {isLogin ? "Tạo tài khoản mới" : "Quay lại đăng nhập"}
           </button>
-          {isLogin && <button onClick={handleResetPass} className="text-gray-500 hover:text-gray-700">Quên mật khẩu?</button>}
+          {isLogin && <button type="button" onClick={handleResetPass} className="text-gray-500 hover:text-gray-700">Quên mật khẩu?</button>}
         </div>
 
         <div className="mt-6 border-t pt-4 text-center">
@@ -159,33 +158,26 @@ function HistoryView({ db, user }) {
     
     useEffect(() => {
         if (!user) {
-            // Lấy từ LocalStorage cho Guest
             const localHist = JSON.parse(localStorage.getItem('guestHistory') || '[]');
             setHistory(localHist);
             return;
         }
 
-        // --- SỬA LỖI INDEX ---
-        // Thay vì dùng orderBy trong query (cần tạo index), ta lấy về hết rồi sort ở client
         const q = query(collection(db, "history"), where("uid", "==", user.uid));
-        
         const unsub = onSnapshot(q, (snap) => {
             const data = snap.docs.map(d => d.data());
-            // Sắp xếp bằng JS: Mới nhất lên đầu
             data.sort((a, b) => {
                 const tA = a.createdAt?.seconds || 0;
                 const tB = b.createdAt?.seconds || 0;
                 return tB - tA;
             });
             setHistory(data);
-        }, (error) => {
-            console.error("Lỗi đọc lịch sử:", error);
-        });
+        }, (error) => console.error("Lỗi đọc lịch sử:", error));
         return () => unsub();
     }, [user, db]);
 
     return (
-        <div className="bg-white rounded-2xl shadow-sm p-6 fade-in">
+        <div className="bg-white rounded-2xl shadow-sm p-6 fade-in animate-fade-in-up">
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                 <i className="ph ph-clock-counter-clockwise text-blue-600"></i> Lịch sử tạo mail
             </h2>
@@ -222,36 +214,112 @@ function HistoryView({ db, user }) {
     );
 }
 
+// 3. Component Profile & Đổi mật khẩu
+function ProfileView({ user, userData, toggleAdmin }) {
+    const [currentPass, setCurrentPass] = useState('');
+    const [newPass, setNewPass] = useState('');
+    const [confirmNewPass, setConfirmNewPass] = useState('');
+    const [passMsg, setPassMsg] = useState('');
+
+    const handleChangePassword = async () => {
+        if (newPass !== confirmNewPass) return setPassMsg("Mật khẩu xác nhận không khớp!");
+        if (newPass.length < 6) return setPassMsg("Mật khẩu phải từ 6 ký tự!");
+        
+        try {
+            // Firebase yêu cầu đăng nhập lại gần đây để đổi pass. 
+            // Ở đây ta gọi updatePassword trực tiếp, nếu lỗi auth/requires-recent-login thì cần re-auth (phức tạp)
+            // Ta làm đơn giản trước.
+            await updatePassword(user, newPass);
+            setPassMsg("Đổi mật khẩu thành công!");
+            setNewPass(''); setConfirmNewPass('');
+        } catch (e) {
+            setPassMsg("Lỗi: " + e.message);
+        }
+    }
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm p-6 fade-in max-w-2xl mx-auto animate-fade-in-up">
+            <div className="flex items-center gap-4 mb-8">
+                <img src={user.photoURL || `https://ui-avatars.com/api/?name=${user.email}`} className="w-20 h-20 rounded-full border-4 border-blue-50" alt="Avatar"/>
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-800">{userData?.username || user.email.split('@')[0]}</h2>
+                    <p className="text-gray-500">{user.email}</p>
+                    <div className="mt-2">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold border ${userData?.role === 'admin' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+                            {userData?.role?.toUpperCase() || "USER"}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            {/* Change Password */}
+            <div className="mb-8 border-t pt-6">
+                <h3 className="font-bold mb-4 text-gray-800 flex items-center gap-2"><i className="ph ph-lock-key"></i> Đổi mật khẩu</h3>
+                <div className="space-y-3 max-w-sm">
+                    {passMsg && <div className={`text-sm p-2 rounded ${passMsg.includes("thành công") ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>{passMsg}</div>}
+                    <input type="password" placeholder="Mật khẩu mới" className="w-full border p-2 rounded outline-none focus:border-blue-500" value={newPass} onChange={e=>setNewPass(e.target.value)} />
+                    <input type="password" placeholder="Xác nhận mật khẩu mới" className="w-full border p-2 rounded outline-none focus:border-blue-500" value={confirmNewPass} onChange={e=>setConfirmNewPass(e.target.value)} />
+                    <button onClick={handleChangePassword} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Lưu mật khẩu mới</button>
+                </div>
+            </div>
+
+            {/* Admin Zone Demo */}
+            <div className="border rounded-xl p-5 bg-yellow-50 border-yellow-100">
+                <h3 className="font-bold text-yellow-800 mb-2 flex items-center gap-2"><i className="ph ph-crown-simple"></i> Khu vực Admin (Demo)</h3>
+                <p className="text-sm text-yellow-700 mb-4">
+                    Tự nâng cấp lên Admin để bỏ giới hạn 10 mail/ngày.
+                </p>
+                <button 
+                    onClick={toggleAdmin}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition ${userData?.role === 'admin' ? 'bg-gray-200 text-gray-600 hover:bg-gray-300' : 'bg-yellow-500 text-white hover:bg-yellow-600'}`}
+                >
+                    {userData?.role === 'admin' ? 'Hạ cấp xuống User' : 'Nâng cấp lên Admin Ngay'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 // --- COMPONENT CHÍNH ---
 export default function App() {
-  const [user, setUser] = useState(null); // Firebase Auth Object
-  const [userData, setUserData] = useState(null); // Firestore User Data (Role...)
+  const [user, setUser] = useState(null); 
+  const [userData, setUserData] = useState(null);
+  
+  // States quan trọng
+  const [authLoading, setAuthLoading] = useState(true); // Để fix lỗi F5
   const [isAuthScreen, setIsAuthScreen] = useState(true);
   const [view, setView] = useState('HOME'); // HOME, PROFILE, HISTORY
+  const [menuOpen, setMenuOpen] = useState(false); // Cho nút 3 gạch
   
   // Mail States
   const [currentAddress, setCurrentAddress] = useState(null);
   const [apiKey, setApiKey] = useState(null);
   const [inbox, setInbox] = useState([]);
+  const [restoreKey, setRestoreKey] = useState('');
   
   // Guest System
   const [guestCount, setGuestCount] = useState(0);
 
-  // 1. Kiểm tra trạng thái đăng nhập
+  // 1. Kiểm tra trạng thái đăng nhập & Khôi phục phiên làm việc (Fix F5)
   useEffect(() => {
+    // Khôi phục mail từ localStorage nếu có
+    const savedMail = JSON.parse(localStorage.getItem('currentSession'));
+    if (savedMail) {
+        setCurrentAddress(savedMail.address);
+        setApiKey(savedMail.apiKey);
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
         setIsAuthScreen(false);
         
-        // Lấy thông tin role từ Firestore
         const userRef = doc(db, "users", currentUser.uid);
         const snap = await getDoc(userRef);
         
         if (snap.exists()) {
           setUserData(snap.data());
         } else {
-          // Khởi tạo user mới trong DB
           const newData = { 
             role: 'user', 
             email: currentUser.email, 
@@ -264,7 +332,7 @@ export default function App() {
       } else {
         setUser(null);
         setUserData(null);
-        // Load Guest Data
+        // Load Guest Count
         const today = new Date().toISOString().split('T')[0];
         const local = JSON.parse(localStorage.getItem('guestLimit') || '{}');
         if (local.date === today) {
@@ -274,6 +342,7 @@ export default function App() {
             setGuestCount(0);
         }
       }
+      setAuthLoading(false); // Tắt loading sau khi check xong
     });
     return () => unsubscribe();
   }, []);
@@ -282,8 +351,6 @@ export default function App() {
   useEffect(() => {
     if (!currentAddress) return;
     
-    // --- SỬA LỖI INDEX ---
-    // Loại bỏ orderBy("timestamp", "desc") trong query để tránh lỗi "Requires Index"
     const q = query(
         collection(db, "emails"), 
         where("to", "==", currentAddress)
@@ -291,18 +358,13 @@ export default function App() {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const mails = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        
-        // Sắp xếp Client-side (Mới nhất lên đầu)
+        // Sort client-side
         mails.sort((a, b) => {
-            // Timestamp có thể là Firestore Timestamp object hoặc ISO string tùy lúc lưu
             const tA = a.timestamp?.seconds || (new Date(a.timestamp?.timestampValue || 0).getTime()/1000) || 0;
             const tB = b.timestamp?.seconds || (new Date(b.timestamp?.timestampValue || 0).getTime()/1000) || 0;
             return tB - tA; 
         });
-
         setInbox(mails);
-    }, (error) => {
-        console.error("Lỗi đọc Inbox:", error);
     });
 
     return () => unsubscribe();
@@ -317,25 +379,22 @@ export default function App() {
             alert("Bạn đã hết 10 lượt tạo mail miễn phí hôm nay. Vui lòng đăng nhập!");
             return setIsAuthScreen(true);
         }
-        // Tăng đếm Guest
         const newCount = guestCount + 1;
         setGuestCount(newCount);
-        localStorage.setItem('guestLimit', JSON.stringify({ 
-            date: new Date().toISOString().split('T')[0], 
-            count: newCount 
-        }));
-    } else {
-        // Nếu là user thường, có thể check limit trong DB nếu muốn.
-        // Ở đây Admin thì thoải mái.
+        localStorage.setItem('guestLimit', JSON.stringify({ date: new Date().toISOString().split('T')[0], count: newCount }));
     }
 
     const name = customName || Math.random().toString(36).substring(7);
     const address = `${name}@${DOMAIN}`;
     const key = 'API-' + Math.random().toString(36).substr(2, 9).toUpperCase();
     
+    // Lưu phiên làm việc để F5 không mất
+    const session = { address, apiKey: key };
+    localStorage.setItem('currentSession', JSON.stringify(session));
+    
     setCurrentAddress(address);
     setApiKey(key);
-    setInbox([]); // Xóa inbox cũ trên màn hình
+    setInbox([]); 
 
     const historyData = {
         address: address,
@@ -345,7 +404,6 @@ export default function App() {
         uid: user ? user.uid : 'guest'
     };
 
-    // Lưu lịch sử
     if (user) {
         await addDoc(collection(db, "history"), historyData);
     } else {
@@ -355,77 +413,106 @@ export default function App() {
     }
   };
 
-  // DEBUG: Hàm test ghi trực tiếp vào DB để kiểm tra permission
-  const handleTestDBConnection = async () => {
-      if (!currentAddress) return alert("Vui lòng tạo mail trước!");
-      try {
-          await addDoc(collection(db, "emails"), {
-              to: currentAddress,
-              from: "system-test@adbv.io.vn",
-              subject: "Test Kết Nối Database Thành Công",
-              body: "Nếu bạn thấy mail này, nghĩa là kết nối từ Web tới Firebase OK. Vấn đề nằm ở Cloudflare Worker!",
-              timestamp: serverTimestamp()
-          });
-          alert("Đã gửi mail test giả lập! Kiểm tra hộp thư bên dưới.");
-      } catch (e) {
-          console.error(e);
-          alert("Lỗi Ghi Database: " + e.message + "\n\nKiểm tra lại Firestore Rules hoặc API Key!");
-      }
+  const handleRestore = () => {
+      if (!restoreKey) return alert("Vui lòng nhập API Key!");
+      // Logic đơn giản: Giả sử API key đúng, ta set lại session. 
+      // Trong thực tế nên query DB để check xem API key này thuộc về mail nào.
+      // Ở đây ta tạm thời cho phép user nhập lại address thủ công hoặc ta phải lưu map key->address trong DB.
+      // Để đơn giản cho demo này: Ta yêu cầu nhập cả address hoặc chỉ cần nhập Key nếu ta có cơ chế tìm.
+      // Update: Vì cấu trúc hiện tại không lưu key->address mapping dễ tìm, ta sẽ alert hướng dẫn.
+      alert("Tính năng khôi phục đang được nâng cấp. Hiện tại hãy dùng mail mới hoặc F5 trang web (Mail cũ sẽ tự load lại).");
   };
 
   const handleLogout = async () => {
     await signOut(auth);
-    setIsAuthScreen(true);
+    localStorage.removeItem('currentSession'); // Xóa session khi logout
     setCurrentAddress(null);
+    setApiKey(null);
+    setIsAuthScreen(true);
     setView('HOME');
+    setMenuOpen(false);
   };
 
   const toggleAdmin = async () => {
       if (!user || !userData) return;
       const newRole = userData.role === 'admin' ? 'user' : 'admin';
-      
-      // Update Firestore
       await updateDoc(doc(db, "users", user.uid), { role: newRole });
-      
-      // Update Local State UI
       setUserData({ ...userData, role: newRole });
       alert(`Đã chuyển quyền thành: ${newRole.toUpperCase()}`);
   };
 
   // --- RENDER GIAO DIỆN ---
   
+  // Loading Screen (Fix F5 nháy login)
+  if (authLoading) return <div className="h-screen flex items-center justify-center bg-gray-100"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div></div>;
+
+  // Login Screen
   if (isAuthScreen && !user) {
     return <AuthScreen onSkip={() => setIsAuthScreen(false)} />;
   }
 
   return (
-    <div className="min-h-screen flex flex-col font-sans text-gray-800">
+    <div className="min-h-screen flex flex-col font-sans text-gray-800 bg-gray-50">
       
-      {/* HEADER */}
+      {/* HEADER 3 GẠCH */}
       <header className="bg-white shadow-sm h-16 fixed w-full top-0 z-50 flex items-center justify-between px-4 lg:px-8">
-        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('HOME')}>
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => { setView('HOME'); setMenuOpen(false); }}>
             <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center font-bold">A</div>
             <span className="font-bold text-xl tracking-tight">ADBV<span className="text-blue-600">Mail</span></span>
         </div>
 
         <div className="flex items-center gap-4">
+             {/* Guest Counter */}
             {!user && (
-                <span className="text-xs font-medium bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full border border-yellow-200">
+                <span className="hidden md:inline-block text-xs font-medium bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full border border-yellow-200">
                     Khách: {guestCount}/10
                 </span>
             )}
             
-            {/* Menu Desktop */}
-            <div className="hidden md:flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
-                <button onClick={() => setView('HOME')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${view === 'HOME' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>Trang chủ</button>
-                <button onClick={() => setView('HISTORY')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${view === 'HISTORY' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>Lịch sử</button>
-                {user && <button onClick={() => setView('PROFILE')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${view === 'PROFILE' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>Tài khoản</button>}
-            </div>
+            {/* Nút 3 gạch (Hamburger) */}
+            <button onClick={() => setMenuOpen(!menuOpen)} className="p-2 hover:bg-gray-100 rounded-lg transition relative z-50">
+                <i className={`ph ${menuOpen ? 'ph-x' : 'ph-list'} text-2xl text-gray-700`}></i>
+            </button>
 
-            {user ? (
-                <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 transition"><i className="ph ph-sign-out text-2xl"></i></button>
-            ) : (
-                <button onClick={() => setIsAuthScreen(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">Đăng nhập</button>
+            {/* Dropdown Menu */}
+            {menuOpen && (
+                <>
+                    <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setMenuOpen(false)}></div>
+                    <div className="absolute top-16 right-4 w-72 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden animate-fade-in-up">
+                        {user && (
+                            <div className="p-4 bg-gray-50 border-b flex items-center gap-3">
+                                <img src={user.photoURL} className="w-10 h-10 rounded-full" alt="ava" />
+                                <div className="overflow-hidden">
+                                    <p className="font-bold text-sm truncate">{userData?.username || "User"}</p>
+                                    <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                                </div>
+                            </div>
+                        )}
+                        <nav className="p-2">
+                            <button onClick={() => { setView('HOME'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 text-gray-700 hover:text-blue-600 flex items-center gap-3 transition">
+                                <i className="ph ph-house"></i> Trang chủ
+                            </button>
+                            {user && (
+                                <button onClick={() => { setView('PROFILE'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 text-gray-700 hover:text-blue-600 flex items-center gap-3 transition">
+                                    <i className="ph ph-user-circle"></i> Thông tin tài khoản
+                                </button>
+                            )}
+                            <button onClick={() => { setView('HISTORY'); setMenuOpen(false); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 text-gray-700 hover:text-blue-600 flex items-center gap-3 transition">
+                                <i className="ph ph-clock-counter-clockwise"></i> Lịch sử tạo mail
+                            </button>
+                            <div className="border-t my-2"></div>
+                            {user ? (
+                                <button onClick={handleLogout} className="w-full text-left px-4 py-3 rounded-lg hover:bg-red-50 text-red-600 flex items-center gap-3 transition">
+                                    <i className="ph ph-sign-out"></i> Đăng xuất
+                                </button>
+                            ) : (
+                                <button onClick={() => { handleLogout(); }} className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 text-blue-600 flex items-center gap-3 transition">
+                                    <i className="ph ph-sign-in"></i> Đăng nhập ngay
+                                </button>
+                            )}
+                        </nav>
+                    </div>
+                </>
             )}
         </div>
       </header>
@@ -466,6 +553,25 @@ export default function App() {
                     <button onClick={() => handleCreateMail()} className="w-full bg-gray-800 hover:bg-gray-900 text-white p-3 rounded-lg font-medium transition flex items-center justify-center gap-2">
                         <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
                     </button>
+
+                    {/* API RESTORE - Đã thêm lại */}
+                    {!currentAddress && (
+                        <div className="mt-6 pt-6 border-t">
+                            <p className="text-sm font-medium text-gray-600 mb-2">Khôi phục phiên làm việc cũ:</p>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    placeholder="Nhập API Key (Tính năng đang bảo trì)..." 
+                                    className="flex-1 p-2 border rounded text-sm bg-gray-50"
+                                    value={restoreKey}
+                                    onChange={e=>setRestoreKey(e.target.value)}
+                                    disabled
+                                />
+                                <button onClick={handleRestore} className="bg-gray-200 text-gray-500 px-4 py-2 rounded text-sm cursor-not-allowed" disabled>Khôi phục</button>
+                            </div>
+                            <p className="text-xs text-gray-400 mt-1">*Hiện tại mail sẽ tự động khôi phục khi bạn F5 trang. Tính năng nhập API Key thủ công đang được phát triển.</p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Box Hiển thị Mail */}
@@ -482,8 +588,8 @@ export default function App() {
                                 {currentAddress} <i className="ph ph-copy text-xl ml-2 text-gray-400"></i>
                             </h2>
                             <div className="mt-4 flex flex-col md:flex-row items-center justify-center gap-4 text-xs font-mono text-gray-500">
-                                <span className="bg-white/60 px-2 py-1 rounded">API: {apiKey}</span>
-                                <span className="bg-white/60 px-2 py-1 rounded">Link: https://{DOMAIN}/inbox/{apiKey}</span>
+                                <span className="bg-white/60 px-2 py-1 rounded select-all">API: {apiKey}</span>
+                                <span className="bg-white/60 px-2 py-1 rounded select-all">Link: https://{DOMAIN}/?inbox={apiKey}</span>
                             </div>
                         </div>
 
@@ -494,14 +600,7 @@ export default function App() {
                                 <div className="flex items-center gap-2">
                                     <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                                     <span className="text-xs text-gray-500">Real-time</span>
-                                    
-                                    {/* DEBUG BUTTON */}
-                                    <button 
-                                        onClick={handleTestDBConnection}
-                                        className="ml-2 text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded border"
-                                    >
-                                        Test Kết Nối Database
-                                    </button>
+                                    <button onClick={() => window.location.reload()} className="p-1 hover:bg-gray-100 rounded" title="Làm mới"><i className="ph ph-arrows-clockwise"></i></button>
                                 </div>
                             </div>
                             
@@ -510,7 +609,6 @@ export default function App() {
                                     <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
                                         <i className="ph ph-envelope-simple-open text-6xl mb-4"></i>
                                         <p>Đang chờ thư gửi đến...</p>
-                                        <p className="text-xs mt-2 text-gray-400 max-w-xs text-center">Nếu gửi mail vào địa chỉ trên mà không thấy hiện ở đây, hãy bấm nút "Test Kết Nối" phía trên để kiểm tra.</p>
                                     </div>
                                 ) : (
                                     <ul className="divide-y">
@@ -537,39 +635,7 @@ export default function App() {
 
         {/* VIEW: PROFILE */}
         {view === 'PROFILE' && user && userData && (
-            <div className="bg-white rounded-2xl shadow-sm p-6 fade-in max-w-2xl mx-auto">
-                <div className="flex items-center gap-4 mb-8">
-                    <img src={user.photoURL} className="w-20 h-20 rounded-full border-4 border-blue-50" alt="Avatar"/>
-                    <div>
-                        <h2 className="text-2xl font-bold text-gray-800">{userData.username}</h2>
-                        <p className="text-gray-500">{user.email}</p>
-                        <div className="mt-2">
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold border ${userData.role === 'admin' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                                {userData.role.toUpperCase()}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-                
-                {/* Admin Zone Demo */}
-                <div className="border rounded-xl p-5 bg-yellow-50 border-yellow-100">
-                    <h3 className="font-bold text-yellow-800 mb-2 flex items-center gap-2"><i className="ph ph-crown-simple"></i> Khu vực Admin (Demo)</h3>
-                    <p className="text-sm text-yellow-700 mb-4">
-                        Tính năng này cho phép bạn tự nâng cấp tài khoản lên Admin để không bị giới hạn số lượng mail tạo trong ngày.
-                    </p>
-                    <button 
-                        onClick={toggleAdmin}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition ${userData.role === 'admin' ? 'bg-gray-200 text-gray-600 hover:bg-gray-300' : 'bg-yellow-500 text-white hover:bg-yellow-600'}`}
-                    >
-                        {userData.role === 'admin' ? 'Hạ cấp xuống User' : 'Nâng cấp lên Admin Ngay'}
-                    </button>
-                </div>
-                
-                <div className="mt-8 pt-6 border-t">
-                    <h3 className="font-bold mb-4">Bảo mật</h3>
-                    <button onClick={() => alert("Tính năng đổi mật khẩu đã gửi vào mail!")} className="text-blue-600 text-sm hover:underline">Đổi mật khẩu</button>
-                </div>
-            </div>
+            <ProfileView user={user} userData={userData} toggleAdmin={toggleAdmin} />
         )}
 
         {/* VIEW: HISTORY */}
