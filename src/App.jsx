@@ -24,12 +24,12 @@ import {
 
 // --- CẤU HÌNH FIREBASE (Lấy từ Firebase Console) ---
 const firebaseConfig = {
-  apiKey: "THAY_API_KEY_CUA_BAN_VAO_DAY",
-  authDomain: "project-id.firebaseapp.com",
-  projectId: "project-id",
-  storageBucket: "project-id.appspot.com",
-  messagingSenderId: "...",
-  appId: "..."
+  apiKey: "AIzaSyCMHTdqRyrEeu1qV9c1ycb8bBLsZwggh60",
+  authDomain: "my-temp-mail-de60c.firebaseapp.com",
+  projectId: "my-temp-mail-de60c",
+  storageBucket: "my-temp-mail-de60c.firebasestorage.app",
+  messagingSenderId: "466454763740",
+  appId: "1:466454763740:web:b7a9563589be2f732bbc19"
 };
 
 // Khởi tạo Firebase
