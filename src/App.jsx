@@ -136,17 +136,16 @@ function pruneGuestHistory() {
   if (kept.length !== raw.length) localStorage.setItem("guestHistory", JSON.stringify(kept));
 }
 
-/** ✅ NEW: tách body sạch từ raw email */
+/** ✅ tách body sạch từ raw email */
 function extractBodyFromRaw(raw = "") {
   if (!raw) return "";
-  // hỗ trợ cả \r\n\r\n
   const idx = raw.indexOf("\r\n\r\n");
   if (idx >= 0) return raw.slice(idx + 4);
   const idx2 = raw.indexOf("\n\n");
   return idx2 >= 0 ? raw.slice(idx2 + 2) : raw;
 }
 
-/** ✅ NEW: làm gọn nội dung để preview/hiển thị */
+/** ✅ làm gọn nội dung để preview/hiển thị */
 function cleanMailText(raw = "") {
   let s = extractBodyFromRaw(raw);
 
@@ -478,9 +477,7 @@ function HistoryView({ db, user }) {
                   </td>
                   <td className="p-3 text-gray-600 text-xs font-semibold">{h.service || "-"}</td>
                   <td className="p-3 text-gray-500 text-xs">
-                    {h.createdAt?.seconds
-                      ? new Date(h.createdAt.seconds * 1000).toLocaleString()
-                      : h.createdAt || "N/A"}
+                    {h.createdAt?.seconds ? new Date(h.createdAt.seconds * 1000).toLocaleString() : h.createdAt || "N/A"}
                   </td>
                 </tr>
               ))
@@ -735,9 +732,14 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ✅ NEW: chọn mail để xem chi tiết + toggle raw
+  // ✅ chọn mail để xem chi tiết + toggle raw
   const [selectedMail, setSelectedMail] = useState(null);
   const [viewRaw, setViewRaw] = useState(false);
+
+  // ✅ NEW: inbox toolbar (search/sort/compact)
+  const [searchText, setSearchText] = useState("");
+  const [sortMode, setSortMode] = useState("newest"); // newest | oldest | from | subject
+  const [compactMode, setCompactMode] = useState(false);
 
   const [isAuthScreen, setIsAuthScreen] = useState(() => {
     const skipped = localStorage.getItem("skipAuth") === "1";
@@ -781,6 +783,31 @@ export default function App() {
     return guestCount || 0;
   }, [user, userData, guestCount]);
 
+  // ✅ NEW: lọc + sort inbox cho dễ nhìn
+  const inboxView = useMemo(() => {
+    const q = (searchText || "").trim().toLowerCase();
+    let arr = Array.isArray(inbox) ? [...inbox] : [];
+
+    if (q) {
+      arr = arr.filter((m) => {
+        const from = (m.from || "").toLowerCase();
+        const sub = (m.subject || "").toLowerCase();
+        const body = cleanMailText(m.body || "").toLowerCase();
+        return from.includes(q) || sub.includes(q) || body.includes(q);
+      });
+    }
+
+    const timeMs = (m) => (m?.timestamp?.seconds ? m.timestamp.seconds * 1000 : 0);
+    arr.sort((a, b) => {
+      if (sortMode === "oldest") return timeMs(a) - timeMs(b);
+      if (sortMode === "from") return String(a.from || "").localeCompare(String(b.from || ""), "vi");
+      if (sortMode === "subject") return String(a.subject || "").localeCompare(String(b.subject || ""), "vi");
+      return timeMs(b) - timeMs(a);
+    });
+
+    return arr;
+  }, [inbox, searchText, sortMode]);
+
   // =========================
   // Admin function
   // =========================
@@ -823,6 +850,11 @@ export default function App() {
 
         localStorage.setItem("skipAuth", "1");
         setIsAuthScreen(false);
+        setView("HOME");
+        setSelectedMail(null);
+        setSearchText("");
+        setSortMode("newest");
+        setCompactMode(false);
 
         // xóa param URL
         window.history.replaceState({}, document.title, "/");
@@ -851,6 +883,12 @@ export default function App() {
       );
       localStorage.setItem("skipAuth", "1");
       setIsAuthScreen(false);
+      setView("HOME");
+      setSelectedMail(null);
+      setSearchText("");
+      setSortMode("newest");
+      setCompactMode(false);
+
       window.history.replaceState({}, document.title, "/");
       if (manual) alert(`Đã khôi phục thành công: ${localMatch.address}`);
       return;
@@ -1014,6 +1052,9 @@ export default function App() {
     setApiKey(key);
     setInbox([]);
     setSelectedMail(null);
+    setSearchText("");
+    setSortMode("newest");
+    setCompactMode(false);
 
     const link = `${WEB_BASE}/${key}`;
 
@@ -1065,6 +1106,9 @@ export default function App() {
     setView("HOME");
     setMenuOpen(false);
     setSelectedMail(null);
+    setSearchText("");
+    setSortMode("newest");
+    setCompactMode(false);
     setIsAuthScreen(false);
   };
 
@@ -1364,29 +1408,27 @@ export default function App() {
                 <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
               </button>
 
-              {/* RESTORE INPUT luôn hiển thị khi chưa có mail */}
-              {!currentAddress && (
-                <div className="mt-4 pt-4 border-t flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Nhập API Key để khôi phục mail..."
-                    className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
-                    value={restoreKey}
-                    onChange={(e) => setRestoreKey(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => restoreFromKey(restoreKey, true)}
-                    className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200"
-                  >
-                    Khôi phục
-                  </button>
-                </div>
-              )}
+              {/* ✅ RESTORE INPUT: luôn hiển thị */}
+              <div className="mt-4 pt-4 border-t flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Nhập API Key để khôi phục mail..."
+                  className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
+                  value={restoreKey}
+                  onChange={(e) => setRestoreKey(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => restoreFromKey(restoreKey, true)}
+                  className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200"
+                >
+                  Khôi phục
+                </button>
+              </div>
 
               {!isVip && (
                 <div className="mt-3 text-xs text-gray-500">
-                  * Guest/User thường: giới hạn {DAILY_LIMIT} mail/ngày. Mail sẽ hết hạn sau 24h (nếu bật TTL).
+                  * Guest/User thường: giới hạn {DAILY_LIMIT} mail/ngày. Mail sẽ hết hạn sau 24h (nếu bạn bật TTL).
                 </div>
               )}
             </div>
@@ -1483,15 +1525,50 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* ✅ Toolbar Search + Sort + Compact */}
+                  <div className="p-4 border-b bg-white flex flex-col md:flex-row gap-2">
+                    <input
+                      value={searchText}
+                      onChange={(e) => setSearchText(e.target.value)}
+                      placeholder="Tìm theo From / Subject / Nội dung..."
+                      className="flex-1 p-3 border rounded-lg outline-none focus:border-blue-500"
+                    />
+
+                    <select
+                      value={sortMode}
+                      onChange={(e) => setSortMode(e.target.value)}
+                      className="p-3 border rounded-lg bg-white text-sm outline-none"
+                      title="Sắp xếp"
+                    >
+                      <option value="newest">Mới nhất</option>
+                      <option value="oldest">Cũ nhất</option>
+                      <option value="from">Theo From</option>
+                      <option value="subject">Theo Subject</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => setCompactMode(!compactMode)}
+                      className="p-3 border rounded-lg bg-white text-sm hover:bg-gray-50"
+                    >
+                      {compactMode ? "Gọn: ON" : "Gọn: OFF"}
+                    </button>
+                  </div>
+
                   <div className="flex-1">
                     {inbox.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
                         <i className="ph ph-envelope-simple-open text-6xl mb-4"></i>
                         <p className="font-medium">Chưa có thư nào</p>
                       </div>
+                    ) : inboxView.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
+                        <i className="ph ph-magnifying-glass text-6xl mb-4"></i>
+                        <p className="font-medium">Không có kết quả phù hợp</p>
+                      </div>
                     ) : (
                       <ul className="divide-y divide-gray-50">
-                        {inbox.map((mail) => (
+                        {inboxView.map((mail) => (
                           <li
                             key={mail.id}
                             onClick={() => {
@@ -1513,12 +1590,12 @@ export default function App() {
                                   : "Vừa xong"}
                               </span>
                             </div>
+
                             <p className="font-bold text-sm text-gray-700 mb-1 pl-10">{mail.subject || "(No subject)"}</p>
 
-                            {/* ✅ preview gọn */}
-                            <p className="text-sm text-gray-500 line-clamp-2 pl-10">
-                              {cleanMailText(mail.body || "")}
-                            </p>
+                            {!compactMode && (
+                              <p className="text-sm text-gray-500 line-clamp-2 pl-10">{cleanMailText(mail.body || "")}</p>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -1534,9 +1611,7 @@ export default function App() {
                       <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden border">
                         <div className="p-4 border-b flex items-start justify-between gap-3 bg-gray-50">
                           <div className="min-w-0">
-                            <div className="font-bold text-gray-800 break-words">
-                              {selectedMail.subject || "(No subject)"}
-                            </div>
+                            <div className="font-bold text-gray-800 break-words">{selectedMail.subject || "(No subject)"}</div>
                             <div className="text-xs text-gray-500 mt-1">
                               <span className="font-semibold">From:</span> {selectedMail.from || "Unknown"} ·{" "}
                               <span className="font-semibold">To:</span> {selectedMail.to || currentAddress}
@@ -1569,7 +1644,7 @@ export default function App() {
 
                         <div className="p-4 max-h-[70vh] overflow-auto">
                           <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
-                            {viewRaw ? (selectedMail.body || "") : cleanMailText(selectedMail.body || "")}
+                            {viewRaw ? selectedMail.body || "" : cleanMailText(selectedMail.body || "")}
                           </pre>
                         </div>
                       </div>
