@@ -47,12 +47,12 @@ import {
  * ==========================================
  */
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyC6MyEVJ7SH7MB6jgx7TW0yx36uy1_JrLc",
+  authDomain: "mailao-9cffb.firebaseapp.com",
+  projectId: "mailao-9cffb",
+  storageBucket: "mailao-9cffb.firebasestorage.app",
+  messagingSenderId: "904960606200",
+  appId: "1:904960606200:web:96d6aac107d94c1257200d",
 };
 
 // Domain của bạn
