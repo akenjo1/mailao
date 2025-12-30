@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -38,6 +38,7 @@ const firebaseConfig = {
   appId: "1:466454763740:web:b7a9563589be2f732bbc19",
 };
 
+// Khởi tạo Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -46,7 +47,10 @@ const db = getFirestore(app);
 const EMAIL_DOMAIN = "adbv.io.vn";
 const WEB_BASE = "https://mailao.vercel.app";
 
-// --- OWNER UID ---
+// ✅ Cloudflare Worker cleaner (để bấm Run cleanup từ web mà không lộ secret)
+const CLEANER_WORKER_BASE = "https://firestore-cleaner.mailpayinap.workers.dev";
+
+// --- OWNER UID (Người duy nhất có quyền set Admin) ---
 const OWNER_UID = "9pWfn0s8LjTGFZPIrchUEUkigoB3";
 
 // === LIMIT ===
@@ -112,15 +116,11 @@ function inferService(from = "", subject = "") {
   return "-";
 }
 
-// ✅ Magic link / restore key: hỗ trợ ?restore= / ?key= và path /API-XXXX
+// ✅ chỉ dùng link dạng ?restore=API-...
 function getMagicKeyFromUrl() {
   const u = new URL(window.location.href);
   const qp = u.searchParams.get("key") || u.searchParams.get("restore");
   if (qp && qp.trim()) return qp.trim();
-
-  const path = window.location.pathname.replace(/^\/+/, "").trim();
-  if (path.startsWith("API-") && path.length <= 64) return path;
-
   return null;
 }
 
@@ -135,275 +135,61 @@ function pruneGuestHistory() {
   if (kept.length !== raw.length) localStorage.setItem("guestHistory", JSON.stringify(kept));
 }
 
-// =========================
-// ✅ EMAIL PARSER (ưu tiên HTML; xử lý raw có header dài / 1 dòng)
-// =========================
-function _normNL(s = "") {
-  return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-function _splitHeadersBody(raw = "") {
-  const s = _normNL(raw);
-
-  // chuẩn: \n\n
-  const m = s.match(/\n[ \t]*\n/);
-  if (m) {
-    const idx = m.index ?? -1;
-    const sepLen = m[0].length;
-    return { headers: s.slice(0, idx), body: s.slice(idx + sepLen) };
-  }
-
-  // fallback: nếu bị dính 1 dòng, tìm HTML marker
-  const htmlIdx = (() => {
-    const a = s.toLowerCase();
-    const i1 = a.indexOf("<!doctype");
-    const i2 = a.indexOf("<html");
-    if (i1 >= 0 && i2 >= 0) return Math.min(i1, i2);
-    return Math.max(i1, i2);
-  })();
-  if (htmlIdx >= 0) return { headers: s.slice(0, htmlIdx), body: s.slice(htmlIdx) };
-
-  return { headers: s, body: "" };
-}
-function _decodeQuotedPrintable(input = "") {
-  let s = String(input || "");
-  s = s.replace(/=\n/g, "");
-  s = s.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-  return s;
-}
-function _b64ToUtf8(b64 = "") {
+function fmtDate(msOrIsoOrSec) {
   try {
-    const clean = String(b64 || "").replace(/\s+/g, "");
-    const bin = atob(clean);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (!msOrIsoOrSec) return "";
+    if (typeof msOrIsoOrSec === "number") return new Date(msOrIsoOrSec).toLocaleString();
+    if (typeof msOrIsoOrSec === "string") return new Date(msOrIsoOrSec).toLocaleString();
+    if (typeof msOrIsoOrSec === "object" && msOrIsoOrSec?.seconds) return new Date(msOrIsoOrSec.seconds * 1000).toLocaleString();
+    return "";
   } catch {
-    return String(b64 || "");
+    return "";
   }
 }
-function _isProbablyHtml(s = "") {
-  const x = String(s || "").slice(0, 12000);
-  return /<!doctype\s+html|<html\b|<head\b|<body\b|<div\b|<table\b|<p\b|<br\b|<span\b|<\/(html|body|div|table|p)>/i.test(
-    x
-  );
+
+function pickReceivedAt(mail) {
+  // ưu tiên receivedAt (ISO) do ingest-mail set
+  if (mail?.receivedAt) return fmtDate(mail.receivedAt);
+  if (mail?.timestamp?.seconds) return fmtDate(mail.timestamp);
+  if (mail?.dateHeader) return fmtDate(mail.dateHeader);
+  return "Vừa xong";
 }
-function _stripHtml(html = "") {
-  try {
-    const doc2 = new DOMParser().parseFromString(String(html || ""), "text/html");
-    return (doc2.body?.textContent || "").replace(/\u00a0/g, " ").trim();
-  } catch {
-    return String(html || "");
-  }
+
+function getSenderName(mail) {
+  const fromName = (mail?.fromName || "").trim();
+  const fromEmail = (mail?.fromEmail || mail?.from || "").trim();
+  return fromName || fromEmail || "Unknown";
 }
-function sanitizeHtmlForIframe(html = "") {
+
+function getSenderEmail(mail) {
+  const fromEmail = (mail?.fromEmail || mail?.from || "").trim();
+  return fromEmail || "";
+}
+
+function safeHtml(html = "") {
+  // NOTE: basic sanitize, tránh script/style + on* handlers
   let s = String(html || "");
-
   s = s.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
-  s = s.replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, "");
-  s = s.replace(/<object[\s\S]*?>[\s\S]*?<\/object>/gi, "");
-  s = s.replace(/<embed[\s\S]*?>/gi, "");
-  s = s.replace(/<link[\s\S]*?>/gi, "");
-
+  s = s.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
   s = s.replace(/\son\w+="[^"]*"/gi, "");
   s = s.replace(/\son\w+='[^']*'/gi, "");
-  s = s.replace(/\son\w+=\S+/gi, "");
-
-  if (!/<html/i.test(s)) {
-    s = `<!doctype html><html><head><meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body{font-family:system-ui,Segoe UI,Roboto,Arial; margin:16px; color:#111; line-height:1.6}
-      img{max-width:100%; height:auto}
-      a{color:#2563eb}
-      pre{white-space:pre-wrap; word-break:break-word}
-      .wrap{max-width:900px; margin:0 auto}
-    </style>
-    </head><body><div class="wrap">${s}</div></body></html>`;
-  }
   return s;
 }
-function _decodePartBody(pb = "", enc = "") {
-  const e = String(enc || "").toLowerCase();
-  let content = pb || "";
-  if (e.includes("base64")) content = _b64ToUtf8(content);
-  else if (e.includes("quoted-printable")) content = _decodeQuotedPrintable(content);
-  return String(content || "").replace(/\u0000/g, "");
-}
 
-function parseEmailContent(raw = "") {
-  const full = _normNL(raw || "");
-  const { headers, body } = _splitHeadersBody(full);
-
-  const boundary =
-    (headers.match(/boundary="?([^"\n;]+)"?/i) || [])[1] ||
-    (full.match(/boundary="?([^"\n;]+)"?/i) || [])[1] ||
-    "";
-
-  const topCT = (headers.match(/Content-Type:\s*([^;\n]+)/i) || [])[1]?.toLowerCase() || "";
-  const topEnc = (headers.match(/Content-Transfer-Encoding:\s*([^\n]+)/i) || [])[1]?.toLowerCase() || "";
-
-  if (!boundary || !full.includes(`--${boundary}`)) {
-    const decoded = _decodePartBody(body || full, topEnc);
-    const html = topCT.includes("text/html") || _isProbablyHtml(decoded) ? decoded.trim() : "";
-    const text = html ? _stripHtml(html) : decoded.trim();
-    return { html: html || "", text: text || "" };
-  }
-
-  const chunks = _normNL(body).split(`--${boundary}`);
-
-  let bestHtml = "";
-  let bestPlain = "";
-  let bestAnyText = "";
-
-  for (const ch0 of chunks) {
-    let part = (ch0 || "").trim();
-    if (!part || part === "--") continue;
-    if (part.endsWith("--")) part = part.slice(0, -2).trim();
-
-    const { headers: ph, body: pb } = _splitHeadersBody(part);
-    const ct = (ph.match(/Content-Type:\s*([^;\n]+)/i) || [])[1]?.toLowerCase() || "";
-    const enc = (ph.match(/Content-Transfer-Encoding:\s*([^\n]+)/i) || [])[1]?.toLowerCase() || "";
-
-    const disp = (ph.match(/Content-Disposition:\s*([^\n]+)/i) || [])[1]?.toLowerCase() || "";
-    if (disp.includes("attachment")) continue;
-
-    const decoded = _decodePartBody(pb, enc).trim();
-    if (!decoded) continue;
-
-    const isHtml = ct.includes("text/html") || _isProbablyHtml(decoded);
-    const isPlain = ct.includes("text/plain") && !isHtml;
-
-    if (isHtml && !bestHtml) bestHtml = decoded;
-    if (isPlain && !bestPlain) bestPlain = decoded;
-
-    if (!bestAnyText) bestAnyText = isHtml ? _stripHtml(decoded) : decoded;
-  }
-
-  const html = bestHtml || "";
-  const text = (bestPlain || (html ? _stripHtml(html) : bestAnyText) || "").trim();
-  return { html, text };
-}
-
-function cleanMailText(raw = "") {
-  const { text } = parseEmailContent(raw);
-  return String(text || "")
-    .replace(/^[A-Za-z0-9+/=]{140,}$/gm, "[...binary/attachment removed...]")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
-}
-function getMailIframeDoc(raw = "") {
-  const { html, text } = parseEmailContent(raw);
-  if (html) return sanitizeHtmlForIframe(html);
-
-  const safeText = String(text || "").replace(
-    /[&<>"']/g,
-    (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m])
-  );
-  return sanitizeHtmlForIframe(`<pre>${safeText}</pre>`);
-}
-
-// =========================
-// ✅ Extract header (From/To/Subject/Date) kể cả raw dính 1 dòng
-// =========================
-function _unfoldHeaderLines(h = "") {
-  const s = _normNL(h);
-  const lines = s.split("\n");
-  const out = [];
-  for (const ln of lines) {
-    if (/^[ \t]/.test(ln) && out.length) out[out.length - 1] += " " + ln.trim();
-    else out.push(ln.trim());
-  }
-  return out.filter(Boolean);
-}
-function extractHeaderValue(raw = "", headerName = "") {
-  const name = String(headerName || "").trim();
-  if (!name) return "";
-
-  const full = String(raw || "");
-  const { headers } = _splitHeadersBody(full);
-  const lines = _unfoldHeaderLines(headers);
-
-  const re1 = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*(.*)$`, "i");
-  for (const ln of lines) {
-    const m = ln.match(re1);
-    if (m) return (m[1] || "").trim();
-  }
-
-  // fallback regex cho 1 dòng: Name: ... (cắt tới HeaderKhác: hoặc tới <!doctype/<html>)
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const reLoose = new RegExp(
-    `(?:^|\\s)${escaped}:\\s*([\\s\\S]*?)(?=\\s[A-Za-z0-9-]{2,}:\\s|\\s<!doctype|\\s<html|$)`,
-    "i"
-  );
-  const m2 = full.match(reLoose);
-  return (m2?.[1] || "").trim();
-}
-function parseEmailAddressFromHeader(v = "") {
-  const s = String(v || "").trim();
-  if (!s) return { name: "", email: "" };
-
-  const m = s.match(/^(.*?)(?:\s*<([^>]+)>)\s*$/);
-  if (m) {
-    const name = (m[1] || "").replace(/^"|"$/g, "").trim();
-    const email = (m[2] || "").trim();
-    return { name, email };
-  }
-
-  const m2 = s.match(/([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i);
-  if (m2) return { name: s.replace(m2[1], "").replace(/[<>"]/g, "").trim(), email: m2[1].trim() };
-
-  return { name: s, email: "" };
-}
-
-// =========================
-// ✅ OTP / code extract
-// =========================
-function extractOtpCandidates(text = "") {
-  const s = String(text || "");
-  const out = new Set();
-  const re = /\b(\d{4,8})\b/g;
-  let m;
-  while ((m = re.exec(s))) {
-    const code = m[1];
-    if (code.length >= 4 && code.length <= 8) out.add(code);
-    if (out.size >= 6) break;
-  }
-  return Array.from(out);
-}
-
-// =========================
-// ✅ Notifications
-// =========================
-async function ensureNotificationPermission() {
-  try {
-    if (!("Notification" in window)) return false;
-    if (Notification.permission === "granted") return true;
-    if (Notification.permission === "denied") return false;
-    const p = await Notification.requestPermission();
-    return p === "granted";
-  } catch {
-    return false;
-  }
-}
-function showMailNotification({ title, body, tag }) {
-  try {
-    if (!("Notification" in window)) return;
-    if (Notification.permission !== "granted") return;
-    const n = new Notification(title || "New mail", {
-      body: body || "",
-      tag: tag || undefined,
-      silent: true,
-    });
-    setTimeout(() => n.close?.(), 8000);
-  } catch {
-    // ignore
-  }
+function textPreviewFromMail(mail) {
+  const t = (mail?.text || "").trim();
+  if (t) return t;
+  // fallback nếu bạn còn lưu body cũ
+  const b = String(mail?.body || "").trim();
+  if (!b) return "";
+  // cắt ngắn
+  return b.split("\n").slice(0, 6).join(" ").replace(/\s+/g, " ").trim();
 }
 
 // ==========================================
-// 1. MÀN HÌNH AUTH (ĐĂNG NHẬP / ĐĂNG KÝ) + ✅ RESTORE API
+// 1. MÀN HÌNH AUTH (ĐĂNG NHẬP / ĐĂNG KÝ)
 // ==========================================
-function AuthScreen({ onLoginSuccess, onSkip, onRestoreKey }) {
+function AuthScreen({ onLoginSuccess, onSkip, onRestore }) {
   const [isLogin, setIsLogin] = useState(true);
   const [inputLogin, setInputLogin] = useState("");
   const [email, setEmail] = useState("");
@@ -415,7 +201,8 @@ function AuthScreen({ onLoginSuccess, onSkip, onRestoreKey }) {
   const [loading, setLoading] = useState(false);
   const [viewForgot, setViewForgot] = useState(false);
 
-  const [restoreKey, setRestoreKey] = useState("");
+  // ✅ thêm ô restore ngay màn đăng nhập
+  const [restoreKeyAuth, setRestoreKeyAuth] = useState("");
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -509,26 +296,6 @@ function AuthScreen({ onLoginSuccess, onSkip, onRestoreKey }) {
               Quay lại đăng nhập
             </button>
           </form>
-
-          {/* ✅ restore ngay ở quên mật khẩu */}
-          <div className="mt-6 border-t pt-4">
-            <div className="text-sm font-semibold text-gray-700 mb-2">Khôi phục Mail bằng API Key</div>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
-                placeholder="Nhập API-XXXX..."
-                value={restoreKey}
-                onChange={(e) => setRestoreKey(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => onRestoreKey?.(restoreKey, true)}
-                className="bg-orange-500 hover:bg-orange-600 text-white px-5 rounded-lg font-medium"
-              >
-                Khôi phục
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -542,8 +309,33 @@ function AuthScreen({ onLoginSuccess, onSkip, onRestoreKey }) {
           <p className="text-gray-500 text-sm">{isLogin ? "Đăng nhập hệ thống" : "Đăng ký tài khoản"}</p>
         </div>
 
-        {error && <div className="bg-red-50 text-red-600 p-3 rounded mb-4 text-sm border border-red-100">{error}</div>}
-        {msg && <div className="bg-green-50 text-green-700 p-3 rounded mb-4 text-sm border border-green-100">{msg}</div>}
+        {error && (
+          <div className="bg-red-50 text-red-600 p-3 rounded mb-4 text-sm border border-red-100">{error}</div>
+        )}
+
+        {/* ✅ RESTORE ngay màn login */}
+        <div className="mb-4 p-3 rounded-xl border bg-gray-50">
+          <div className="text-xs font-bold text-gray-600 mb-2">Khôi phục mail bằng API Key</div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Nhập API Key... (VD: API-XXXX)"
+              className="flex-1 p-3 border rounded-lg bg-white outline-none"
+              value={restoreKeyAuth}
+              onChange={(e) => setRestoreKeyAuth(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => onRestore?.(restoreKeyAuth)}
+              className="bg-orange-500 hover:bg-orange-600 text-white px-4 rounded-lg font-medium"
+            >
+              Khôi phục
+            </button>
+          </div>
+          <div className="text-[11px] text-gray-500 mt-2">
+            Bạn có thể dùng link dạng: <b>{WEB_BASE}?restore=API-XXXXX</b>
+          </div>
+        </div>
 
         {isLogin ? (
           <form onSubmit={handleLogin} className="space-y-4">
@@ -634,29 +426,6 @@ function AuthScreen({ onLoginSuccess, onSkip, onRestoreKey }) {
           )}
         </div>
 
-        {/* ✅ RESTORE API key ngay ở màn login/register */}
-        <div className="mt-6 border-t pt-4">
-          <div className="text-sm font-semibold text-gray-700 mb-2">Khôi phục Mail bằng API Key</div>
-          <div className="flex gap-2">
-            <input
-              className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
-              placeholder="Nhập API-XXXX..."
-              value={restoreKey}
-              onChange={(e) => setRestoreKey(e.target.value)}
-            />
-            <button
-              type="button"
-              onClick={() => onRestoreKey?.(restoreKey, true)}
-              className="bg-orange-500 hover:bg-orange-600 text-white px-5 rounded-lg font-medium"
-            >
-              Khôi phục
-            </button>
-          </div>
-          <div className="text-[11px] text-gray-500 mt-2">
-            * Bạn có thể paste API Key hoặc link dạng <b>?restore=API-...</b> trên trình duyệt khác để vào lại mail.
-          </div>
-        </div>
-
         <div className="mt-6 border-t pt-4 text-center">
           <button
             type="button"
@@ -745,8 +514,9 @@ function HistoryView({ db, user }) {
                       <span className="font-mono text-[10px] text-gray-600 bg-gray-100 px-2 py-1 rounded w-fit">
                         {h.apiKey}
                       </span>
+                      {/* ✅ link dạng ?restore= */}
                       <a
-                        href={h.link}
+                        href={`${WEB_BASE}?restore=${encodeURIComponent(h.apiKey)}`}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs text-blue-500 hover:underline flex items-center gap-1"
@@ -757,9 +527,7 @@ function HistoryView({ db, user }) {
                   </td>
                   <td className="p-3 text-gray-600 text-xs font-semibold">{h.service || "-"}</td>
                   <td className="p-3 text-gray-500 text-xs">
-                    {h.createdAt?.seconds
-                      ? new Date(h.createdAt.seconds * 1000).toLocaleString()
-                      : h.createdAt || "N/A"}
+                    {h.createdAt?.seconds ? new Date(h.createdAt.seconds * 1000).toLocaleString() : h.createdAt || "N/A"}
                   </td>
                 </tr>
               ))
@@ -907,7 +675,7 @@ function ProfileView({ user, userData, auth }) {
 }
 
 // ==========================================
-// 4. OWNER ADMIN PANEL
+// 4. OWNER ADMIN PANEL (Quản lý User)
 // ==========================================
 function OwnerAdminPanel({ db, user, setUserRoleByUid }) {
   const [qText, setQText] = useState("");
@@ -1001,21 +769,21 @@ function OwnerAdminPanel({ db, user, setUserRoleByUid }) {
 }
 
 // ==========================================
-// 5. APP
+// 5. APP SHELL & LOGIC CHÍNH
 // ==========================================
 export default function App() {
+  // Auth
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
 
+  // App state
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState("HOME");
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // ✅ chọn mail để xem chi tiết
   const [selectedMail, setSelectedMail] = useState(null);
-
-  const [searchText, setSearchText] = useState("");
-  const [sortMode, setSortMode] = useState("newest");
 
   const [isAuthScreen, setIsAuthScreen] = useState(() => {
     const skipped = localStorage.getItem("skipAuth") === "1";
@@ -1045,35 +813,23 @@ export default function App() {
   const [guestCount, setGuestCount] = useState(0);
   const [customName, setCustomName] = useState("");
 
-  // ✅ Read/unread per mailbox
-  const readStoreKey = useMemo(() => (currentAddress ? `read_${currentAddress}` : null), [currentAddress]);
-  const [readSet, setReadSet] = useState(() => new Set());
-  useEffect(() => {
-    if (!readStoreKey) {
-      setReadSet(new Set());
-      return;
-    }
+  // ✅ read/unread
+  const [readIds, setReadIds] = useState(() => {
     try {
-      const arr = JSON.parse(localStorage.getItem(readStoreKey) || "[]");
-      setReadSet(new Set(Array.isArray(arr) ? arr : []));
+      const raw = localStorage.getItem("readMailIds");
+      return raw ? JSON.parse(raw) : {};
     } catch {
-      setReadSet(new Set());
+      return {};
     }
-  }, [readStoreKey]);
+  });
 
-  const markRead = (mailId) => {
-    if (!readStoreKey || !mailId) return;
-    setReadSet((prev) => {
-      const next = new Set(prev);
-      next.add(mailId);
-      try {
-        localStorage.setItem(readStoreKey, JSON.stringify(Array.from(next)));
-      } catch {}
-      return next;
-    });
-  };
+  // ✅ cleanup button state
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupMsg, setCleanupMsg] = useState("");
 
-  const isVip = useMemo(() => !!user && (user.uid === OWNER_UID || userData?.role === "admin"), [user, userData]);
+  const isVip = useMemo(() => {
+    return !!user && (user.uid === OWNER_UID || userData?.role === "admin");
+  }, [user, userData]);
 
   const usedCount = useMemo(() => {
     const t = todayKey();
@@ -1085,56 +841,30 @@ export default function App() {
     return guestCount || 0;
   }, [user, userData, guestCount]);
 
-  const unreadCount = useMemo(() => {
-    if (!inbox?.length) return 0;
-    let c = 0;
-    for (const m of inbox) if (!readSet.has(m.id)) c++;
-    return c;
-  }, [inbox, readSet]);
-
-  const filteredInbox = useMemo(() => {
-    const q = (searchText || "").trim().toLowerCase();
-    let list = [...(inbox || [])];
-
-    if (q) {
-      list = list.filter((m) => {
-        const raw = String(m.body || "");
-        const fromH = extractHeaderValue(raw, "From");
-        const subjH = extractHeaderValue(raw, "Subject");
-        const from = String(m.from || fromH || "").toLowerCase();
-        const subject = String(m.subject || subjH || "").toLowerCase();
-        const text = cleanMailText(raw).toLowerCase();
-        return from.includes(q) || subject.includes(q) || text.includes(q);
-      });
-    }
-
-    const getTs = (m) => (m?.timestamp?.seconds ? m.timestamp.seconds : 0);
-
-    list.sort((a, b) => {
-      if (sortMode === "oldest") return getTs(a) - getTs(b);
-      if (sortMode === "from") return String(a.from || "").localeCompare(String(b.from || ""));
-      if (sortMode === "subject") return String(a.subject || "").localeCompare(String(b.subject || ""));
-      return getTs(b) - getTs(a);
-    });
-
-    return list;
-  }, [inbox, searchText, sortMode]);
-
-  // Notifications: detect new mail
-  const inboxInitRef = useRef(false);
-  const prevIdsRef = useRef(new Set());
-
-  // =========================
-  // Admin function
-  // =========================
   const setUserRoleByUid = async (targetUid, role) => {
     if (!user || user.uid !== OWNER_UID) throw new Error("Không có quyền OWNER");
     await updateDoc(doc(db, "users", targetUid), { role });
   };
 
-  // =========================
-  // Restore từ API Key (Magic Link)
-  // =========================
+  // ✅ restore helper (save session)
+  const saveSession = (address, k, expMs = null) => {
+    setCurrentAddress(address);
+    setApiKey(k);
+
+    localStorage.setItem(
+      "currentSession",
+      JSON.stringify({
+        address,
+        apiKey: k,
+        createdAtMs: Date.now(),
+        expiresAtMs: expMs || null,
+      })
+    );
+
+    localStorage.setItem("skipAuth", "1");
+    setIsAuthScreen(false);
+  };
+
   const restoreFromKey = async (key, manual = false) => {
     const k = (key || "").trim();
     if (!k) return;
@@ -1151,76 +881,41 @@ export default function App() {
           return;
         }
 
-        setCurrentAddress(address);
-        setApiKey(k);
+        saveSession(address, k, exp || null);
 
-        localStorage.setItem(
-          "currentSession",
-          JSON.stringify({
-            address,
-            apiKey: k,
-            createdAtMs: Date.now(),
-            expiresAtMs: exp || null,
-          })
-        );
-
-        localStorage.setItem("skipAuth", "1");
-        setIsAuthScreen(false);
-
+        // xoá param URL
         window.history.replaceState({}, document.title, "/");
 
-        if (manual) {
-          ensureNotificationPermission();
-          alert(`Đã khôi phục thành công: ${address}`);
-        }
+        if (manual) alert(`Đã khôi phục thành công: ${address}`);
         return;
       }
     } catch {
       // ignore
     }
 
+    // fallback: guestHistory local
     const localHist = JSON.parse(localStorage.getItem("guestHistory") || "[]");
     const localMatch = localHist.find((h) => h.apiKey === k);
     if (localMatch?.address) {
-      setCurrentAddress(localMatch.address);
-      setApiKey(k);
-      localStorage.setItem(
-        "currentSession",
-        JSON.stringify({
-          address: localMatch.address,
-          apiKey: k,
-          createdAtMs: localMatch.createdAtMs || Date.now(),
-          expiresAtMs: localMatch.expiresAtMs || null,
-        })
-      );
-      localStorage.setItem("skipAuth", "1");
-      setIsAuthScreen(false);
+      saveSession(localMatch.address, k, localMatch.expiresAtMs || null);
       window.history.replaceState({}, document.title, "/");
-      if (manual) {
-        ensureNotificationPermission();
-        alert(`Đã khôi phục thành công: ${localMatch.address}`);
-      }
+      if (manual) alert(`Đã khôi phục thành công: ${localMatch.address}`);
       return;
     }
 
     if (manual) alert("Không tìm thấy API Key này!");
   };
 
-  // =========================
-  // Refresh inbox
-  // =========================
   const refreshInbox = (e) => {
     e?.preventDefault?.();
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 800);
   };
 
-  // =========================
-  // Limit check (Guest + User thường)
-  // =========================
   const checkLimitAndBump = async () => {
     if (isVip) return true;
 
+    // Guest
     if (!user) {
       const today = todayKey();
       const local = JSON.parse(localStorage.getItem("guestLimit") || "{}");
@@ -1238,6 +933,7 @@ export default function App() {
       return true;
     }
 
+    // User thường
     try {
       const today = todayKey();
       const userRef = doc(db, "users", user.uid);
@@ -1267,9 +963,6 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Reserve email (đảm bảo không trùng)
-  // =========================
   const reserveAddress = async (addressLower) => {
     const ref = doc(db, "reserved_addresses", addressLower);
     try {
@@ -1288,12 +981,7 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Create mail
-  // =========================
   const handleCreateMail = async (custom = null) => {
-    ensureNotificationPermission();
-
     const ok = await checkLimitAndBump();
     if (!ok) return;
 
@@ -1361,10 +1049,8 @@ export default function App() {
     setApiKey(key);
     setInbox([]);
     setSelectedMail(null);
-    setSearchText("");
-    setSortMode("newest");
 
-    // ✅ Link share qua trình duyệt khác: dùng query param (không cần rewrite)
+    // ✅ link chỉ dạng restore query
     const link = `${WEB_BASE}?restore=${encodeURIComponent(key)}`;
 
     await setDoc(doc(db, "keys", key), {
@@ -1404,9 +1090,6 @@ export default function App() {
     }
   };
 
-  // =========================
-  // Logout
-  // =========================
   const handleLogout = async () => {
     await signOut(auth);
     localStorage.removeItem("currentSession");
@@ -1418,12 +1101,38 @@ export default function App() {
     setIsAuthScreen(false);
   };
 
-  // =========================
+  // ✅ RUN CLEANUP via Worker (không lộ secret)
+  const runCleanupViaWorker = async () => {
+    setCleanupMsg("");
+    setCleanupLoading(true);
+    try {
+      const r = await fetch(`${CLEANER_WORKER_BASE}/run`, { method: "GET", cache: "no-store" });
+      const data = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(data?.error || "Cleanup failed");
+      const inner = data?.response;
+      const deleted = inner?.deletedKeys ?? inner?.deleted ?? inner?.count ?? 0;
+      setCleanupMsg(`✅ Cleanup OK. Deleted: ${deleted}`);
+    } catch (e) {
+      setCleanupMsg(`❌ Cleanup lỗi: ${String(e?.message || e)}`);
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
+  // ✅ Notification permission helper
+  const ensureNotifyPermission = async () => {
+    if (typeof Notification === "undefined") return false;
+    if (Notification.permission === "granted") return true;
+    if (Notification.permission === "denied") return false;
+    const p = await Notification.requestPermission();
+    return p === "granted";
+  };
+
   // INIT
-  // =========================
   useEffect(() => {
     pruneGuestHistory();
 
+    // magic link chỉ dạng ?restore=
     const magicKey = getMagicKeyFromUrl();
     if (magicKey) restoreFromKey(magicKey);
 
@@ -1468,52 +1177,42 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // =========================
   // Listen inbox + notify + auto update "service"
-  // =========================
   useEffect(() => {
     if (!currentAddress) return;
 
-    inboxInitRef.current = false;
-    prevIdsRef.current = new Set();
-
     const q = query(collection(db, "emails"), where("to", "==", currentAddress));
+    let first = true;
+    let lastSeenId = null;
+
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const mails = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      mails.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+      mails.sort((a, b) => {
+        // ưu tiên receivedAt nếu có
+        const ta = a.receivedAt ? new Date(a.receivedAt).getTime() : (a.timestamp?.seconds || 0) * 1000;
+        const tb = b.receivedAt ? new Date(b.receivedAt).getTime() : (b.timestamp?.seconds || 0) * 1000;
+        return tb - ta;
+      });
 
-      const currentIds = new Set(mails.map((m) => m.id));
-      if (inboxInitRef.current) {
-        const prev = prevIdsRef.current || new Set();
-        const newOnes = mails.filter((m) => !prev.has(m.id));
-        if (newOnes.length > 0) {
-          const m0 = newOnes[0];
-          const raw = String(m0.body || "");
-          const fromH = extractHeaderValue(raw, "From");
-          const subjH = extractHeaderValue(raw, "Subject");
-          const fromParsed = parseEmailAddressFromHeader(fromH);
-          const fromText = fromParsed.name || fromParsed.email || String(m0.from || "Unknown");
-
-          showMailNotification({
-            title: `📩 Mail mới: ${String(m0.subject || subjH || "(No subject)")}`,
-            body: `${fromText}\n${new Date((m0.timestamp?.seconds || Math.floor(Date.now() / 1000)) * 1000).toLocaleString()}`,
-            tag: `mail-${currentAddress}`,
+      // notify nếu có mail mới (không notify lần đầu load)
+      const topId = mails[0]?.id || null;
+      if (!first && topId && topId !== lastSeenId) {
+        const m = mails[0];
+        const ok = await ensureNotifyPermission();
+        if (ok) {
+          new Notification(getSenderName(m), {
+            body: m.subject || "(No subject)",
           });
         }
-      } else {
-        inboxInitRef.current = true;
       }
-      prevIdsRef.current = currentIds;
+      first = false;
+      lastSeenId = topId;
 
       setInbox(mails);
 
-      // auto update "service"
+      // auto update service
       if (apiKey && mails.length > 0) {
-        const raw0 = String(mails[0]?.body || "");
-        const from0 = extractHeaderValue(raw0, "From") || mails[0]?.from || "";
-        const subject0 = extractHeaderValue(raw0, "Subject") || mails[0]?.subject || "";
-        const s = inferService(from0, subject0);
-
+        const s = inferService(getSenderEmail(mails[0]) || "", mails[0]?.subject || "");
         if (s && s !== "-") {
           if (user) {
             try {
@@ -1539,17 +1238,17 @@ export default function App() {
     return () => unsubscribe();
   }, [currentAddress, apiKey, user]);
 
-  // =========================
-  // Render helpers (From name đẹp)
-  // =========================
-  const getDisplayFrom = (mail) => {
-    const raw = String(mail?.body || "");
-    const fromH = extractHeaderValue(raw, "From");
-    const parsed = parseEmailAddressFromHeader(fromH);
-    const name = parsed.name || inferService(mail?.from || "", mail?.subject || "");
-    const email = parsed.email || "";
-    if (name && email) return `${name} <${email}>`;
-    return name || email || String(mail?.from || "Unknown");
+  // persist readIds
+  useEffect(() => {
+    try {
+      localStorage.setItem("readMailIds", JSON.stringify(readIds));
+    } catch {}
+  }, [readIds]);
+
+  // when open mail => mark as read
+  const openMail = (mail) => {
+    setSelectedMail(mail);
+    setReadIds((prev) => ({ ...(prev || {}), [mail.id]: true }));
   };
 
   if (authLoading) {
@@ -1571,16 +1270,10 @@ export default function App() {
           localStorage.setItem("skipAuth", "1");
           setIsAuthScreen(false);
         }}
-        onRestoreKey={(k) => {
-          ensureNotificationPermission();
-          restoreFromKey(k, true);
-        }}
+        onRestore={(k) => restoreFromKey(k, true)}
       />
     );
   }
-
-  const magicLinkQuery = apiKey ? `${WEB_BASE}?restore=${encodeURIComponent(apiKey)}` : "";
-  const magicLinkPath = apiKey ? `${WEB_BASE}/${apiKey}` : "";
 
   return (
     <div className="min-h-screen flex flex-col font-sans text-gray-800 bg-gray-50">
@@ -1599,8 +1292,8 @@ export default function App() {
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span className="hidden md:inline-flex items-center gap-2 text-xs font-medium bg-gray-100 text-gray-600 px-3 py-1 rounded-full border">
+        <div className="flex items-center gap-3">
+          <span className="hidden md:inline-flex items-center gap-1 text-xs font-medium bg-gray-100 text-gray-600 px-3 py-1 rounded-full border">
             {isVip ? (
               <>
                 <i className="ph ph-crown-simple text-yellow-600"></i> VIP
@@ -1608,12 +1301,19 @@ export default function App() {
             ) : (
               <>Limit: {usedCount}/{DAILY_LIMIT}</>
             )}
-            {currentAddress && (
-              <span className="ml-1 px-2 py-0.5 rounded-full bg-white border text-[10px] text-gray-600">
-                Unread: {unreadCount}
-              </span>
-            )}
           </span>
+
+          {/* ✅ cleanup button */}
+          <button
+            type="button"
+            onClick={runCleanupViaWorker}
+            disabled={cleanupLoading}
+            className="hidden md:inline-flex items-center gap-2 px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 text-sm"
+            title="Dọn mail hết hạn"
+          >
+            <i className={`ph ${cleanupLoading ? "ph-spinner-gap" : "ph-broom"}`}></i>
+            {cleanupLoading ? "Cleaning..." : "Cleanup"}
+          </button>
 
           {!user && (
             <button
@@ -1717,18 +1417,6 @@ export default function App() {
                       <i className="ph ph-sign-in text-lg"></i> Đăng nhập / Đăng ký
                     </button>
                   )}
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const ok = await ensureNotificationPermission();
-                      alert(ok ? "Đã bật thông báo trình duyệt ✅" : "Không bật được thông báo (bị chặn hoặc bạn từ chối).");
-                      setMenuOpen(false);
-                    }}
-                    className="w-full text-left px-4 py-3 rounded-lg hover:bg-gray-50 text-gray-700 font-medium flex items-center gap-3 transition"
-                  >
-                    <i className="ph ph-bell text-lg text-gray-600"></i> Bật thông báo
-                  </button>
                 </nav>
               </div>
             </>
@@ -1736,8 +1424,14 @@ export default function App() {
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="flex-1 mt-20 p-4 max-w-5xl mx-auto w-full pb-20">
+      {/* MAIN CONTENT */}
+      <main className="flex-1 mt-20 p-4 max-w-4xl mx-auto w-full pb-20">
+        {cleanupMsg && (
+          <div className="mb-4 text-sm p-3 rounded-xl border bg-white">
+            {cleanupMsg}
+          </div>
+        )}
+
         {view === "HOME" && (
           <div className="space-y-6 fade-in">
             {/* CREATE AREA */}
@@ -1778,32 +1472,25 @@ export default function App() {
                 <i className="ph ph-shuffle"></i> Tạo Ngẫu Nhiên
               </button>
 
-              {/* ✅ RESTORE luôn hiển thị ở Trang chủ (cả khi đang có mail) */}
-              <div className="mt-4 pt-4 border-t">
-                <div className="text-sm font-semibold text-gray-700 mb-2">Khôi phục Mail bằng API Key</div>
-                <div className="flex gap-2">
+              {/* RESTORE INPUT */}
+              {!currentAddress && (
+                <div className="mt-4 pt-4 border-t flex gap-2">
                   <input
                     type="text"
-                    placeholder="Nhập API Key để khôi phục mail..."
+                    placeholder="Nhập API Key để khôi phục mail... (VD: API-XXXX)"
                     className="flex-1 p-3 border rounded-lg bg-gray-50 focus:bg-white outline-none"
                     value={restoreKey}
                     onChange={(e) => setRestoreKey(e.target.value)}
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      ensureNotificationPermission();
-                      restoreFromKey(restoreKey, true);
-                    }}
+                    onClick={() => restoreFromKey(restoreKey, true)}
                     className="bg-orange-500 hover:bg-orange-600 text-white px-6 rounded-lg font-medium shadow-lg shadow-orange-200"
                   >
                     Khôi phục
                   </button>
                 </div>
-                <div className="text-[11px] text-gray-500 mt-2">
-                  * Link dùng được trên trình duyệt khác: <b>{WEB_BASE}?restore=API-...</b>
-                </div>
-              </div>
+              )}
 
               {!isVip && (
                 <div className="mt-3 text-xs text-gray-500">
@@ -1855,154 +1542,129 @@ export default function App() {
                     </div>
 
                     <div className="bg-white/80 p-3 rounded-lg border border-blue-100 backdrop-blur-sm">
-                      <p className="text-xs text-gray-400 font-bold uppercase mb-1">Magic Link (dùng trên trình duyệt khác)</p>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <a href={magicLinkQuery} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline truncate mr-2">
-                            {magicLinkQuery}
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(magicLinkQuery);
-                              alert("Đã copy Link!");
-                            }}
-                            className="text-blue-500 hover:text-blue-700"
-                          >
-                            <i className="ph ph-copy"></i>
-                          </button>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <a href={magicLinkPath} target="_blank" rel="noreferrer" className="text-xs text-gray-500 underline truncate mr-2">
-                            {magicLinkPath}
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(magicLinkPath);
-                              alert("Đã copy Link!");
-                            }}
-                            className="text-gray-500 hover:text-gray-700"
-                          >
-                            <i className="ph ph-copy"></i>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 text-xs text-gray-500">
-                    * Nếu mail hiển thị lộn xộn: do <b>body</b> Firebase đang lưu <b>raw email</b> (có cả header). Web sẽ tự tách
-                    header + render HTML để xem chuẩn như CapCut.
-                  </div>
-                </div>
-
-                {/* INBOX */}
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 min-h-[420px] flex flex-col">
-                  <div className="p-4 border-b bg-gray-50 rounded-t-2xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-bold text-gray-700 flex items-center gap-2">
-                        <i className="ph ph-tray text-lg text-blue-600"></i> Hộp thư đến
-                      </h3>
-
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-                          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Real-time
-                        </div>
-
+                      <p className="text-xs text-gray-400 font-bold uppercase mb-1">Magic Link (Truy cập nhanh)</p>
+                      <div className="flex items-center justify-between">
+                        {/* ✅ chỉ dạng ?restore= */}
+                        <a
+                          href={`${WEB_BASE}?restore=${encodeURIComponent(apiKey)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-blue-500 underline truncate mr-2"
+                        >
+                          {WEB_BASE}?restore={apiKey}
+                        </a>
                         <button
                           type="button"
-                          onClick={refreshInbox}
-                          className={`p-2 hover:bg-gray-200 rounded-lg text-gray-500 transition ${
-                            refreshing ? "animate-spin text-blue-600" : ""
-                          }`}
-                          title="Làm mới"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${WEB_BASE}?restore=${encodeURIComponent(apiKey)}`);
+                            alert("Đã copy Link!");
+                          }}
+                          className="text-blue-500 hover:text-blue-700"
                         >
-                          <i className="ph ph-arrows-clockwise text-lg"></i>
+                          <i className="ph ph-copy"></i>
                         </button>
                       </div>
                     </div>
+                  </div>
+                </div>
 
-                    <div className="flex flex-col md:flex-row gap-2">
-                      <div className="flex-1 flex items-center gap-2 bg-white border rounded-lg px-3 py-2">
-                        <i className="ph ph-magnifying-glass text-gray-400"></i>
-                        <input
-                          value={searchText}
-                          onChange={(e) => setSearchText(e.target.value)}
-                          placeholder="Tìm theo người gửi / tiêu đề / nội dung..."
-                          className="w-full outline-none text-sm text-gray-700"
-                        />
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 min-h-[400px] flex flex-col">
+                  <div className="p-4 border-b flex items-center justify-between bg-gray-50 rounded-t-2xl">
+                    <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                      <i className="ph ph-tray text-lg text-blue-600"></i> Hộp thư đến
+                    </h3>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await ensureNotifyPermission();
+                          alert(ok ? "✅ Đã bật thông báo!" : "❌ Bạn đã chặn thông báo trong trình duyệt.");
+                        }}
+                        className="px-3 py-2 text-xs rounded-lg border bg-white hover:bg-gray-100"
+                        title="Bật thông báo trình duyệt"
+                      >
+                        <i className="ph ph-bell"></i> Thông báo
+                      </button>
+
+                      <div className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Real-time
                       </div>
 
-                      <select className="border rounded-lg px-3 py-2 text-sm bg-white" value={sortMode} onChange={(e) => setSortMode(e.target.value)}>
-                        <option value="newest">Mới nhất</option>
-                        <option value="oldest">Cũ nhất</option>
-                        <option value="from">Theo người gửi</option>
-                        <option value="subject">Theo tiêu đề</option>
-                      </select>
+                      <button
+                        type="button"
+                        onClick={refreshInbox}
+                        className={`p-2 hover:bg-gray-200 rounded-lg text-gray-500 transition ${
+                          refreshing ? "animate-spin text-blue-600" : ""
+                        }`}
+                        title="Làm mới"
+                      >
+                        <i className="ph ph-arrows-clockwise text-lg"></i>
+                      </button>
                     </div>
                   </div>
 
                   <div className="flex-1">
-                    {filteredInbox.length === 0 ? (
+                    {inbox.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-gray-300 py-20">
                         <i className="ph ph-envelope-simple-open text-6xl mb-4"></i>
-                        <p className="font-medium">{inbox.length === 0 ? "Chưa có thư nào" : "Không có kết quả"}</p>
+                        <p className="font-medium">Chưa có thư nào</p>
                       </div>
                     ) : (
                       <ul className="divide-y divide-gray-50">
-                        {filteredInbox.map((mail) => {
-                          const raw = String(mail.body || "");
-                          const subject = mail.subject || extractHeaderValue(raw, "Subject") || "(No subject)";
-                          const when = mail.timestamp?.seconds
-                            ? new Date(mail.timestamp.seconds * 1000).toLocaleString()
-                            : extractHeaderValue(raw, "Date") || "Vừa xong";
-
-                          const fromHeader = extractHeaderValue(raw, "From");
-                          const fromParsed = parseEmailAddressFromHeader(fromHeader);
-                          const fromLine = fromParsed.name || fromParsed.email ? `${fromParsed.name || ""}${fromParsed.name && fromParsed.email ? " " : ""}${fromParsed.email ? `<${fromParsed.email}>` : ""}`.trim() : getDisplayFrom(mail);
-
-                          const service = inferService(fromHeader || mail.from || "", subject);
-                          const isRead = readSet.has(mail.id);
-                          const preview = cleanMailText(raw);
+                        {inbox.map((mail) => {
+                          const isRead = !!readIds?.[mail.id];
+                          const senderName = getSenderName(mail);
+                          const senderEmail = getSenderEmail(mail);
+                          const received = pickReceivedAt(mail);
+                          const preview = textPreviewFromMail(mail);
 
                           return (
                             <li
                               key={mail.id}
-                              onClick={() => {
-                                setSelectedMail(mail);
-                                markRead(mail.id);
-                              }}
-                              className={`relative p-5 cursor-pointer transition ${isRead ? "opacity-60 hover:opacity-80" : "hover:bg-blue-50/50"}`}
+                              onClick={() => openMail(mail)}
+                              className={`p-5 cursor-pointer transition group ${
+                                isRead ? "bg-white opacity-60" : "hover:bg-blue-50/60"
+                              }`}
                             >
-                              {!isRead && <span className="absolute top-5 right-5 w-2.5 h-2.5 rounded-full bg-blue-600" title="Chưa đọc" />}
-
-                              <div className="flex justify-between items-start mb-2 gap-3">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs shrink-0">
-                                    {(fromParsed.name || fromParsed.email || mail.from || "?").charAt(0).toUpperCase()}
+                              <div className="flex justify-between items-start gap-3">
+                                <div className="flex items-start gap-3 min-w-0">
+                                  <div className="relative">
+                                    <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm">
+                                      {(senderName || "?").charAt(0).toUpperCase()}
+                                    </div>
+                                    {/* ✅ chấm xanh chỉ khi chưa đọc */}
+                                    {!isRead && (
+                                      <span className="absolute -top-1 -right-1 w-3 h-3 bg-blue-600 rounded-full border-2 border-white"></span>
+                                    )}
                                   </div>
+
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-2 min-w-0">
-                                      <span className="font-bold text-gray-800 truncate">{fromLine || "Unknown"}</span>
-                                      {service !== "-" && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 border text-gray-600 shrink-0">
-                                          {service}
-                                        </span>
+                                      <span className={`font-bold truncate ${isRead ? "text-gray-600" : "text-gray-900"}`}>
+                                        {senderName}
+                                      </span>
+                                      {senderEmail && (
+                                        <span className="text-xs text-gray-400 truncate">{senderEmail}</span>
                                       )}
                                     </div>
-                                    <div className="text-[11px] text-gray-500 truncate">
-                                      <span className="font-semibold">To:</span> {mail.to || currentAddress}
+
+                                    <div className={`mt-1 font-bold text-sm truncate ${isRead ? "text-gray-500" : "text-gray-700"}`}>
+                                      {mail.subject || "(No subject)"}
                                     </div>
+
+                                    {preview && (
+                                      <div className="mt-1 text-sm text-gray-500 line-clamp-2">
+                                        {preview}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
 
-                                <span className="text-xs text-gray-400 whitespace-nowrap">{when}</span>
+                                <div className="text-xs text-gray-400 whitespace-nowrap">
+                                  {received}
+                                </div>
                               </div>
-
-                              <p className="font-bold text-sm text-gray-700 mb-1 pl-10">{subject}</p>
-                              <p className="text-sm text-gray-500 line-clamp-2 pl-10">{preview || "(No content)"}</p>
                             </li>
                           );
                         })}
@@ -2011,126 +1673,64 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* MODAL */}
+                {/* ✅ POPUP xem mail (bỏ raw, ưu tiên HTML) */}
                 {selectedMail && (
                   <>
                     <div className="fixed inset-0 bg-black/40 z-[60]" onClick={() => setSelectedMail(null)} />
-                    <div className="fixed inset-0 z-[61] flex items-center justify-center p-3 sm:p-4">
-                      <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden border">
-                        <div className="p-4 border-b bg-white">
-                          {(() => {
-                            const raw = String(selectedMail.body || "");
-                            const subject = selectedMail.subject || extractHeaderValue(raw, "Subject") || "(No subject)";
+                    <div className="fixed inset-0 z-[61] flex items-center justify-center p-4">
+                      <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border">
+                        <div className="p-4 border-b flex items-start justify-between gap-3 bg-gray-50">
+                          <div className="min-w-0">
+                            <div className="font-bold text-gray-800 break-words">
+                              {selectedMail.subject || "(No subject)"}
+                            </div>
 
-                            const fromH = extractHeaderValue(raw, "From") || selectedMail.from || "";
-                            const toH = extractHeaderValue(raw, "To") || selectedMail.to || currentAddress || "";
-                            const dateH = extractHeaderValue(raw, "Date") || "";
-                            const fromParsed = parseEmailAddressFromHeader(fromH);
-                            const toParsed = parseEmailAddressFromHeader(toH);
-
-                            const displayFrom = fromParsed.name && fromParsed.email ? `${fromParsed.name} <${fromParsed.email}>` : fromParsed.email || fromParsed.name || String(fromH || "Unknown");
-                            const displayTo = toParsed.email ? toParsed.email : String(toH || currentAddress);
-
-                            const receivedAt = selectedMail.timestamp?.seconds
-                              ? new Date(selectedMail.timestamp.seconds * 1000).toLocaleString()
-                              : dateH || "Vừa xong";
-
-                            const service = inferService(fromH, subject);
-
-                            const text = cleanMailText(raw);
-                            const otpList = extractOtpCandidates(text);
-
-                            return (
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="text-lg sm:text-xl font-extrabold text-gray-900 break-words">{subject}</div>
-
-                                  <div className="mt-2 grid sm:grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-sm text-gray-700">
-                                    <div className="break-words">
-                                      <span className="font-semibold text-gray-900">From:</span> {displayFrom}
-                                    </div>
-                                    <div className="break-words">
-                                      <span className="font-semibold text-gray-900">To:</span> {displayTo}
-                                    </div>
-                                    <div className="break-words">
-                                      <span className="font-semibold text-gray-900">Received:</span> {receivedAt}
-                                    </div>
-                                    <div className="break-words">
-                                      <span className="font-semibold text-gray-900">Service:</span> {service}
-                                    </div>
-                                  </div>
-
-                                  {otpList.length > 0 && (
-                                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                                      <span className="text-[11px] font-bold text-gray-500 uppercase">Code:</span>
-                                      {otpList.slice(0, 4).map((c) => (
-                                        <button
-                                          key={c}
-                                          type="button"
-                                          onClick={() => {
-                                            navigator.clipboard.writeText(c);
-                                            alert("Đã copy code!");
-                                          }}
-                                          className="px-3 py-1.5 rounded-full border bg-gray-50 hover:bg-gray-100 font-mono text-sm"
-                                          title="Click để copy"
-                                        >
-                                          {c}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        navigator.clipboard.writeText(text || "");
-                                        alert("Đã copy nội dung text!");
-                                      }}
-                                      className="px-3 py-2 text-xs sm:text-sm rounded-lg border bg-white hover:bg-gray-50"
-                                    >
-                                      <i className="ph ph-copy mr-1"></i> Copy text
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const srcDoc = getMailIframeDoc(raw);
-                                        const w = window.open("", "_blank");
-                                        if (w) {
-                                          w.document.open();
-                                          w.document.write(srcDoc);
-                                          w.document.close();
-                                        }
-                                      }}
-                                      className="px-3 py-2 text-xs sm:text-sm rounded-lg border bg-white hover:bg-gray-50"
-                                    >
-                                      <i className="ph ph-arrow-square-out mr-1"></i> Mở toàn màn hình
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedMail(null)}
-                                  className="p-2 rounded-lg hover:bg-gray-100"
-                                  title="Đóng"
-                                >
-                                  <i className="ph ph-x text-xl"></i>
-                                </button>
+                            <div className="text-xs text-gray-500 mt-2 space-y-1">
+                              <div>
+                                <span className="font-semibold">From:</span>{" "}
+                                {selectedMail.fromName ? (
+                                  <>
+                                    {selectedMail.fromName}{" "}
+                                    {getSenderEmail(selectedMail) ? (
+                                      <span className="text-gray-400">{"<" + getSenderEmail(selectedMail) + ">"}</span>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  getSenderEmail(selectedMail) || "Unknown"
+                                )}
                               </div>
-                            );
-                          })()}
+                              <div>
+                                <span className="font-semibold">To:</span> {selectedMail.to || currentAddress}
+                              </div>
+                              <div className="text-gray-400">
+                                {pickReceivedAt(selectedMail)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMail(null)}
+                              className="p-2 rounded-lg hover:bg-gray-200"
+                              title="Đóng"
+                            >
+                              <i className="ph ph-x text-xl"></i>
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="p-3 sm:p-4 bg-gray-50">
-                          <iframe
-                            title="mail-view"
-                            sandbox="allow-popups allow-top-navigation-by-user-activation"
-                            className="w-full rounded-xl border bg-white"
-                            style={{ height: "72vh" }}
-                            srcDoc={getMailIframeDoc(String(selectedMail.body || ""))}
-                          />
+                        <div className="p-4 max-h-[75vh] overflow-auto">
+                          {selectedMail.html ? (
+                            <div
+                              className="prose max-w-none"
+                              dangerouslySetInnerHTML={{ __html: safeHtml(selectedMail.html) }}
+                            />
+                          ) : (
+                            <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
+                              {(selectedMail.text || selectedMail.body || "").trim() || "(No content)"}
+                            </pre>
+                          )}
                         </div>
                       </div>
                     </div>
