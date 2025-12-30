@@ -1,44 +1,53 @@
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import admin from "firebase-admin";
 
-function getAdminDb() {
-  if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
-    const sa = JSON.parse(raw);
-    initializeApp({ credential: cert(sa) });
-  }
-  return getFirestore();
+function getAdmin() {
+  if (admin.apps.length) return admin;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON on Vercel");
+  const svc = JSON.parse(raw);
+
+  // fix private_key bị \n
+  if (svc.private_key) svc.private_key = svc.private_key.replace(/\\n/g, "\n");
+
+  admin.initializeApp({ credential: admin.credential.cert(svc) });
+  return admin;
 }
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+    // chỉ cho GET
+    if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-    const secret = req.headers["x-cleanup-secret"] || req.query.secret || req.query.key || "";
-    if (!process.env.CLEANUP_SECRET) return res.status(500).json({ ok: false, error: "Missing CLEANUP_SECRET on Vercel" });
-    if (String(secret) !== String(process.env.CLEANUP_SECRET)) return res.status(401).json({ ok: false, error: "Unauthorized" });
+    const secretExpected = process.env.CLEANUP_SECRET;
+    if (!secretExpected) return res.status(500).json({ ok: false, error: "Missing CLEANUP_SECRET on Vercel" });
 
-    const db = getAdminDb();
-    const now = Timestamp.now();
-
-    // Xoá các mail đã hết hạn (expiresAt <= now)
-    const q = db.collection("emails").where("expiresAt", "<=", now).limit(400);
-    let deleted = 0;
-
-    while (true) {
-      const snap = await q.get();
-      if (snap.empty) break;
-
-      const batch = db.batch();
-      snap.docs.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
-
-      deleted += snap.size;
-      if (snap.size < 400) break;
+    const secretGot = req.headers["x-cleanup-secret"]; // header name luôn lowercase trên Vercel
+    if (!secretGot || secretGot !== secretExpected) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
-    return res.json({ ok: true, deleted });
+    const a = getAdmin();
+    const db = a.firestore();
+
+    const now = new Date();
+
+    // Xoá key hết hạn (collection keys)
+    const snap = await db
+      .collection("keys")
+      .where("expiresAt", "<", a.firestore.Timestamp.fromDate(now))
+      .limit(300) // tránh quá nặng
+      .get();
+
+    let deletedKeys = 0;
+
+    const batch = db.batch();
+    snap.docs.forEach((d) => {
+      batch.delete(d.ref);
+      deletedKeys++;
+    });
+    if (deletedKeys > 0) await batch.commit();
+
+    return res.json({ ok: true, deletedKeys });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
